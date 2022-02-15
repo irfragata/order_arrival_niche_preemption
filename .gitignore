@@ -37,3 +37,9 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+
+.Rhistor
+
+alpha_estimate_fixed_final.Rmd
+Plant_defense_quantification.Rmd
+Stats_Plots.Rmd
