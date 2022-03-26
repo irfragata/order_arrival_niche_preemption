@@ -1,0 +1,1559 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Functions and packages
+```{r include=FALSE}
+
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(car)
+library(fitdistrplus)
+library(tidyr)
+library(tidyverse)
+library(ggtext)
+
+theme_ines<-theme(axis.text = element_text(size=14), axis.title = element_text(size=14, face="bold"), legend.text = element_text(size=12), strip.text = element_text(size=14), plot.title = element_text(size=14, face="bold"), panel.grid=element_line(colour="white"), panel.background = element_rect(fill="white") , axis.line = element_line(size = 0.5, linetype = "solid",
+                                   colour = "black"), strip.background = element_rect(fill="white"))
+
+save_plot<-function(dir, width=15, height=10, ...){
+  ggsave(dir, width = width, height = height, units = c("cm"))
+}
+```
+
+# 1 - Functions to estimate models
+The idea is to use an iterative process, where you fit first a very general model and sequentially implement the competitive ability and intra and interspecific competitive ability in the models
+
+```{r}
+
+## We are not going to fit directly lambdas and interaction coefficients. Rather we are going to follow
+# a nested approach where a series of model are nested and uses pararameters obtained from the previous models
+# that will make easier the convergence of complex models. 
+
+### Since our data follows an exponential distribution we will have to change the way we optimize. The first optimization procedure we just do a simple fitting
+
+
+### Fitting with negative binomial
+compmodel1<-function(par, length_data, data){
+  a<-par[1]
+  sigma<- par[2]
+  pred<-rep(a, times=length_data) 
+  
+  
+  llik<-dnorm(data, log(pred), sd=sigma, log=TRUE)
+  
+  return(sum(-1*llik))  
+}
+
+## Fitting a negative binomial with interaction regardless of the species identity
+
+compmodel2<-function(par, data, dens){
+  a<-par[1]
+  alpha<-par[2]
+  sigma<-par[3]
+  
+  tot_density<-apply(dens, MARGIN=2, FUN=sum)
+  
+  pred<-a/(1+alpha*(tot_density)) 
+  
+  
+  llik<-dnorm(data, log(pred), sd=sigma, log=TRUE)
+  
+  return(sum(-1*llik))  
+}
+
+#model 3 - all species have different competitive effects
+compmodel3<-function(par, data, dens){
+	a<-par[1] #same as model 2
+	b_Te<-par[2]	## new parameters- use alpha estimate from model 2 as start value for fitting
+	b_Tu<-par[3]
+	sigma <- par[4]
+
+	# same form as model 1, but with all the species:
+	pred<- a/ (1+ b_Te* dens['Te',] + b_Tu * dens['Tu',])
+
+	# likelihood as before:
+  llik<-dnorm(data, log(pred), sd=sigma, log=TRUE)
+
+	# return sum of negative log likelihoods
+	return(sum(-1*llik, na.rm=TRUE)) #sum of negative log likelihoods
+}
+
+
+```
+
+# Estimate competition using Oscar script per box
+
+Initial lambda from CA estimates
+
+### Importing data and setuping up data frame per box
+```{r}
+d<-read.csv("./Data/Coexistence_data_final_corr.csv", header=TRUE, row.names = NULL, as.is=c(2))
+
+# First map the density to treatments
+d$Density<-mapvalues(d$Treatment, as.character(levels(as.factor(d$Treatment))), c("10:10","10:10", "10:10", "19:1", "19:1", "1:19","1:19", "20:0", "0:20"))
+
+# Mapping the 3 different treatments
+d$Timing<-mapvalues(d$Treatment, as.character(levels(as.factor(d$Treatment))), c("same time", "Tu first", "Te first", "same time", "Te first", "same time", "Tu first", "single", "single"))
+
+
+## Calculating the number of each species per box
+sumData<-ddply(d, c("Treatment", "Block", "Box", "Density", "Timing"), summarise,
+               sumTe    = sum(Te),
+               sumTu = sum(Tu))
+str(sumData)
+
+sumData$DaysTe<-as.numeric(as.character(mapvalues(sumData$Treatment, as.character(levels(as.factor(sumData$Treatment))), c(30,30,32,30,32,30,30,30,0))))
+
+sumData$DaysTu<-as.numeric(as.character(mapvalues(sumData$Treatment, as.character(levels(as.factor(sumData$Treatment))), c(30,32,30,30,30,30,32,0,30))))
+
+sumData$initialTe<-as.numeric(as.character(mapvalues(sumData$Treatment, as.character(levels(as.factor(sumData$Treatment))), c(10,10, 10, 19,19, 1, 1,20, 0) )))
+
+sumData$initialTu<-as.numeric(as.character(mapvalues(sumData$Treatment, as.character(levels(as.factor(sumData$Treatment))), c(10,10, 10, 1,1, 19, 19,0, 20) )))
+
+str(sumData)
+
+sumData$Total<-sapply(c(1:length(sumData[,1])), function(x){
+  if(sumData$Treatment[x]=="20Te"){
+  a<-sumData$sumTe[x]
+  }else if(sumData$Treatment[x]=="20Tu"){
+    a<-sumData$sumTu[x]
+  }else{
+     a<-sumData$sumTe[x]+sumData$sumTu[x]
+  }
+
+  a
+})
+
+##### per day per capita
+sumData$R_Te<-sapply(c(1:length(sumData[,1])), function(x){
+  if(sumData$Treatment[x]=="20Tu"){
+    a<-0
+  }else{
+    a= ((sumData$sumTe[x]-as.numeric(as.character(sumData$initialTe[x])))/sumData$DaysTe[x])/sumData$initialTe[x]
+  }
+  
+  a
+})
+
+sumData$R_Tu<-sapply(c(1:length(sumData[,1])), function(x){
+  if(sumData$Treatment[x]=="20Te"){
+    a<-0
+  }else{
+    a= ((sumData$sumTu[x]-as.numeric(as.character(sumData$initialTu[x])))/sumData$DaysTu[x])/sumData$initialTu[x]
+  }
+  
+  a
+})
+
+sumData
+str(sumData)
+
+colnames(sumData)[13:14]<-c("Te", "Tu")
+ 
+## IWe need two databases: the first is species' production in absence of competition. --> don't have, only the 20
+# The second database correspond to the intra and interspecific competition
+
+# Just reshaping the data frame
+w_d<-gather(sumData, Species, rate,Te:Tu, factor_key=TRUE)
+
+# Just putting the background species
+w_d$background<-sapply(c(1:length(w_d[,1])), function(x){
+  if(w_d$Timing[x]=="single"){
+    a<-as.character(w_d$Species[x])
+  }else{
+    if(w_d$Species[x]=="Tu")
+      a<-"Te"
+    else if(w_d$Species[x]=="Te")
+    a<-"Tu"
+    
+  }
+  
+    a
+})
+
+#knowing the interspecific number of competitors
+w_d$neighbours_number<-sapply(c(1:length(w_d[,1])), function(x){
+  if(w_d$Timing[x]=="single"){
+    a<-0
+  }else{
+    if(w_d$Density[x]=="10:10")
+      a<-10
+    else if(w_d$Density[x]=="1:19" & w_d$Species[x]=="Te")
+      a<-19
+    
+    else if(w_d$Density[x]=="1:19" & w_d$Species[x]=="Tu")
+      a<-1
+    
+    else if(w_d$Density[x]=="19:1" & w_d$Species[x]=="Te")
+      a<-1
+    
+    else if(w_d$Density[x]=="19:1" & w_d$Species[x]=="Tu")
+      a<-19
+  }
+  
+  
+  a
+})
+
+#Adding the intraspecific number of neighbours
+w_d$neighbours_numberIntra<-sapply(c(1:length(w_d[,1])), function(x){
+  if(w_d$Timing[x]=="single"){
+    a<-20
+  }else{
+    if(w_d$Density[x]=="10:10")
+      a<-10
+    else if(w_d$Density[x]=="1:19" & w_d$Species[x]=="Te")
+      a<-1
+    
+    else if(w_d$Density[x]=="1:19" & w_d$Species[x]=="Tu")
+      a<-19
+    
+    else if(w_d$Density[x]=="19:1" & w_d$Species[x]=="Te")
+      a<-19
+    
+    else if(w_d$Density[x]=="19:1" & w_d$Species[x]=="Tu")
+      a<-1
+  }
+  
+  
+  a
+})
+str(w_d)
+
+
+## We need to remove the singles from the other species
+w_d<-w_d[-which(w_d$Treatment=="20Tu" & w_d$Species=="Te"),]
+w_d<-w_d[-which(w_d$Treatment=="20Te" & w_d$Species=="Tu"),]
+w_d[which(w_d$Treatment=="20Tu" & w_d$Species=="Te"),]
+w_d$rate[which(w_d$rate<0)]<-0
+
+comp<-w_d
+## then separate between treatment: Te arriving first, Tu arriving first, same time, we always maintain the treatment 20 single, as a baseline
+subset(w_d,Timing=="Te first" | Timing=="single")->comp_te
+subset(w_d, Timing=="Tu first" | Timing=="single")->comp_tu
+subset(w_d, (Timing=="same time" | Timing=="single"))->comp_both
+
+
+### Checking the data distribution
+descdist(w_d$rate, discrete = FALSE, boot=500)
+
+plotdist(w_d$rate, histo = TRUE, demp = TRUE)
+
+
+plot(fitdist(w_d$rate, distr = "exp"))
+
+
+## In general the exponetial describes better our data set  so we should change the error distribution of our data
+```
+
+#### Density one from competitive ability setup
+```{r}
+ca<-read.table("./Data/LeafDisk_exp.txt", header = TRUE, row.names = NULL)
+
+str(ca)
+colnames(ca)[c(6,7)]<-c("Te","Tu")
+w_ca1<-gather(ca, Species, rate, Te:Tu, factor_key=TRUE)
+#Removing the treatments that don't make sense
+w_ca1<-w_ca1[-c(which(w_ca1$Treatment=="Tu" & w_ca1$Species=="Te"),which(w_ca1$Treatment=="Te" & w_ca1$Species=="Tu")),]
+
+# Calculating growth rate (because for the CA I have only one generation and for the coexistence I have two)
+
+w_ca1$R<-sapply(c(1:length(w_ca1[,1])), function(x){
+  
+    a<- (w_ca1$rate[x]-1)/1/16
+    #print(a)
+    if(is.na(a) | a< 0){
+      a<-NA
+    }
+    
+    a
+  })
+
+w_ca1$R2<-sapply(c(1:length(w_ca1[,1])), function(x){
+  
+    a<- 1*(1+w_ca1$R[x])^2
+    #print(a)
+    if(is.na(a) | a< 0){
+      a<-NA
+    }
+    
+    a
+  })
+
+#Calculating the starting values for the lamba. I am removing all growth rates that were NA as they correspond to dead/missing females at the end of 48h
+mean_ca<- subset(w_ca1, R>0) %>%
+  group_by(Species)%>%
+  summarise(mean_R=mean(R2, na.rm=TRUE), sd_R=sd(R2, na.rm=TRUE))
+
+mean_ca
+
+```
+# Estimate intra and interspecific competitive ability with lambda fixed estimated from all the treatments
+
+In this case we use the lambda i and lambda j from the data of all treatments together
+
+## setting up model and data
+```{r}
+dir.create("./Estimate_Lambda_fixed_allTreats")
+
+w_d
+comp_both
+
+str(w_d)
+str(comp_both)
+
+### These models are used to compute the lambda from all treatments together, and assume that lambda is fixed!
+
+compmodel6<-function(par, data, dens){
+  
+  if(splist[i]=="Te"){
+	  a<-lambda_values[1,2] # taking from the estimation from all together (see below)
+  	alpha<-par[1]
+	  sigma <- par[2]
+	  
+	   }else{
+	  a<-lambda_values[2,2] #taking from the estimation from all together (see below)
+    
+	  }
+  
+    alpha<-par[1]
+	  sigma <- par[2]
+
+	 tot_density<-apply(dens, MARGIN=2, FUN=sum)
+
+	# same form as model 1, but with all the species:
+	  pred<-a/(1+alpha*(tot_density)) 
+
+	# likelihood as before:
+  llik<-dnorm(data, log(pred), sd=sigma, log=TRUE)
+
+	# return sum of negative log likelihoods
+	return(sum(-1*llik, na.rm=TRUE)) #sum of negative log likelihoods
+}
+
+compmodel7<-function(par, data, dens){
+  
+  if(splist[i]=="Te"){
+	  a<-lambda_values[1,2] # taking from the estimation from all together (see below)
+  	b_Te<-par[1]
+	  b_Tu<-par[2]
+	  sigma <- par[3]
+
+	# same form as model 1, but with all the species:
+	pred<- a/ (1+ b_Te* dens['Te',] + b_Tu * dens['Tu',])
+	
+	  
+	  }else{
+	  a<-lambda_values[2,2] #taking from the estimation from all together (see below)
+  	b_Te<-par[1]
+	  b_Tu<-par[2]
+	  sigma <- par[3]
+
+	# same form as model 1, but with all the species:
+	pred<- a/ (1+ b_Te* dens['Te',] + b_Tu * dens['Tu',])
+	}
+	
+
+	# likelihood as before:
+  llik<-dnorm(data, log(pred), sd=sigma, log=TRUE)
+
+	# return sum of negative log likelihoods
+	return(sum(-1*llik, na.rm=TRUE)) #sum of negative log likelihoods
+}
+
+```
+
+## Estimating lambda for all the data
+```{r}
+# Just creates the matrix using the initial growth rate calculated from the previous experiment
+lam<-data.frame(Species=c(rep("Te", times=10), rep("Tu", times=10)), rate=c(rep(mean_ca$mean_R[1], 10),rep(mean_ca$mean_R[2], 10)), neighbours_number=rep(1, 20))
+
+lam
+
+splist<-unique(comp$Species)
+
+
+################################################
+## get a list of target species to work through sequentially:
+splist<-unique(comp$Species)
+
+##alpha order splist:
+
+splist<-splist[order(splist)]
+
+## objects to hold the final parameter estimates from model 3:
+
+alpha_matrix<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(alpha_matrix)<-splist
+colnames(alpha_matrix)<-splist
+lambda_est<-NULL
+sigma_est<-NULL
+convergence_code<-NULL
+
+upper_lambda <-NULL
+lower_lambda <-NULL
+
+lower_alpha<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(lower_alpha)<-splist
+colnames(lower_alpha)<-splist
+
+upper_alpha<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(upper_alpha)<-splist
+colnames(upper_alpha)<-splist
+
+```
+
+
+#### Generating pdf
+```{r}
+pdf(file="./Estimate_Lambda_fixed_allTreats/alphas_and_lambdas_all_together.pdf", width=11, height=8)
+## for each species in turn as a target:
+
+for(i in 1:length(splist)){
+
+	#set up grid for plotting and add first panel indiciating focal sp:
+	layout(matrix(1:2, nrow=2))
+	plot(x=0, y=0, type='n')
+	text(0, 0, paste(splist[i], "as focal", sep=" "), cex=1, col="red")
+	
+	
+	## subset out the rows that are needed from the competition df
+	comp_points<-subset(w_d, w_d$Species==splist[i], drop=TRUE)
+	
+	## and the correct lambda plants
+	
+	lam_points<-subset(lam, lam$Species==splist[i])
+	
+	## now need to build up a vector of nonzero seed production
+	## and corresponding density vectors (held in a matrix) for background species 
+	## to use in model fitting
+	
+	## start with the lambda rate- will add on to this for each background:
+	
+	rate<-lam_points$rate
+	
+	
+	##build density matrix (each row will be density of a species)
+	dens<-matrix(0, nrow=length(splist), ncol=(nrow(lam_points)+ nrow(comp_points)))
+	row.names(dens)<-splist
+	
+	
+	##for each background species the target competes against:
+	background_list<-unique(comp_points$background)
+	
+	## use this counter to keep track of which column is next to have data added to
+	## set it to begin after the lambda points:
+	
+	start <- nrow(lam_points) +1
+	
+
+	for(j in 1:length(background_list)){
+		## LOOP creates a rate vector and a corresponding dens ("density") matrix with 
+		## background species as rows, and columns corresponding to the seed production
+		## vector.
+		## beginning columns correspond to lambda plants
+		
+		#take just the rows pertaining to a specific background sp:
+		bg_points<- subset(comp_points, comp_points$background==background_list[j])
+		
+		## which row of the density matrix corresponds?
+		#The inter
+		rownum <- which(row.names(dens)==background_list[j])
+		#The intra
+		rownumIntra<-splist[j]
+		#column to end with:
+		
+		end<-start + nrow(bg_points)-1
+		
+		## drop in density values into matrix:
+		
+		dens[rownum, start:end]<-bg_points$neighbours_number
+		dens[rownumIntra, start:end]<-bg_points$neighbours_numberIntra
+		
+		## add seed numbers into the rate vector
+		
+		rate<-c(rate, bg_points$rate)
+
+		##increase start counter so that next species is offset from this one
+		start<-end+1
+	}
+	#rownum <- which(row.names(dens)==splist[i])
+	#dens[rownum, 1:length(lam_points[,1])]<-lam_points$neighbours_number
+	dens
+	## should now have "rate" vector and corresponding "dens"ity matrix
+	## can test ncol(dens)==length(rate)
+	
+	## we'll be working with log rate (for giving a lognormal error structure):
+		
+	log_rate<-log(rate+1)
+	
+	
+#############################
+	## model 1, no competition ##
+	#############################
+	
+	###recall parameters are lambda and sigma- initialize these with estimates from the competitive ability data
+	if(splist[i]=="Te"){
+	  par1<-c(mean_ca$mean_R[1], mean_ca$sd_R[1])
+	}else{
+	  par1<-c(mean_ca$mean_R[2], mean_ca$sd_R[2])
+	}
+	
+	##repeat optimization until we get convergence (or we try 25 times)
+	for(k in 1:25){
+	 	testcomp1<-optim(par1, fn=compmodel1, length_data=length(log_rate), data=log_rate)
+	 	##update start parameters to final estimate to use in next run in case of nonconvergence
+	 	par1<-testcomp1$par
+	 	if(testcomp1$convergence==0){
+	 		print(paste(splist[i], "model 1 converged on rep", k, sep=" "))
+	 		break
+	 		}
+	 	
+	 	}
+
+		
+	#############################
+	## model 2, one alpha      ##
+	#############################
+	
+	## pars here are lambda, alpha and sigma- use lambda and sigma from model 1 as starting esimtates
+	
+	par2<-c(testcomp1$par[1],0.01, testcomp1$par[2])
+
+	##as before:
+	for(k in 1:25){
+		##now using a specific method that permits constrained optimization so that alpha has to be nonzero- this is an issue in some of the fits, especially in model 3. lower parameter has same order as par2
+		testcomp2<-optim(par2, compmodel2, dens=dens, data=log_rate, method="L-BFGS-B", lower=c(1,0,0.0000000001))
+		par2<-testcomp2$par
+		if(testcomp2$convergence==0){
+			print(paste(splist[i],  "model 2 converged on rep", k, sep=" "))
+			break
+			}
+		}
+
+	#############################
+	## model 3, unique alphas  ##
+	#############################
+	
+	## pars here are lambda, 10 alphas and sigma- use lambda and sigma from model 2, and alphas from model 2 as starting esimtate for each species
+	
+	par3<-c(testcomp2$par[1], rep(testcomp2$par[2], times=2), testcomp2$par[3])
+	
+	##as before
+	for(k in 1:25){
+		##now using a specific method that permits constained optimization so that alpha has to be nonzero- 
+		testcomp3<-optim(par3,data=log_rate, dens=dens, fn=compmodel3, method="L-BFGS-B", lower=c(1,0,0,0.0000000001), control=list(maxit=5000), hessian=T)
+		par3<-testcomp3$par
+		if(testcomp3$convergence==0){
+			print(paste(splist[i], "model 3 converged on rep", k, sep=" "))
+			break
+			}
+		}
+
+	
+	##################################
+	### save estimates from model 3 ##
+	##################################
+	
+	lambda_est<-c(lambda_est, testcomp3$par[1])
+	sigma_est<-c(sigma_est, testcomp3$par[4])
+	convergence_code<-c(convergence_code, testcomp3$convergence)
+	
+	fisher_info<-solve(testcomp3$hessian)
+	prop_sigma<-sqrt(diag(fisher_info))
+	upper<-testcomp3$par+1.96*prop_sigma
+	lower<-testcomp3$par-1.96*prop_sigma
+
+	upper_lambda <- c(upper_lambda, upper[1])
+	lower_lambda <- c(lower_lambda, lower[1])                 
+	
+	
+	## in keeping with Lotka Volterra notation, we'll use alpha1_2 to indicate effect of
+	## sp 2 on growth of 1.  Following convention, i refers to rows and j to cols in a matrix
+	## so each step of the loop here (for a target sp) corresponds to one row of this matrix:
+	
+	alphas<-testcomp3$par[2:3]
+	alpha_matrix[i,]<-alphas
+	
+	errors_lower_alpha <-lower[2:3]
+	lower_alpha[i,] <- errors_lower_alpha
+	errors_upper_alpha <-upper[2:3]
+	upper_alpha[i,] <- errors_upper_alpha
+	
+	##note that in cases where there is no data for a particular species the alpha estimate for that species ends up as the starting value- we need to be careful of these as they are basically gargbage numbers.  Keeping them in up to now to keep the structure of the data constant, but will set them to NA here:
+	
+	#identify which species have no data in this fit:
+	which(apply(dens, MARGIN=1, FUN=mean)==0)->no_data
+	
+	## set their alphas to NA in the matrix:
+	
+	alpha_matrix[i,no_data]<-NA
+	
+	
+	
+	###############################
+	## some diagnostics +  plots ##
+	###############################
+	
+	## print an error to the console if any one of the three models failed to converge:
+	
+	if(testcomp1$convergence + testcomp2$convergence + testcomp3$convergence !=0){print(paste("at least one model did not converge for", splist[i], sep=" "))}
+	
+	##################################
+	## plot observed vs predicted:
+	##################
+	
+	par<-testcomp3$par
+	
+	#from model 3 code:
+	
+	lambda<-par[1] #same as model 2
+	a_Te<-par[2]	## new parameters- use alpha estimate from model 2 as start value for fitting
+	a_Tu<-par[3]
+
+	pred<- lambda/ (1+ a_Te* dens['Te',] + a_Tu * dens['Tu',])
+
+	plot(rate, pred, xlim=c(min(c(rate, pred)), max(c(rate, pred)) ), ylim=c(min(c(rate, pred)), max(c(rate, pred)) ), log='xy', xlab="observed rate", ylab="predicted rate", main=splist[i] )
+	
+	abline(a=0, b=1, lwd=2)
+	
+	
+	#####################
+	#### plot each fit
+	##########
+	
+	names(alphas)<-splist
+	
+	names(apply(dens, MARGIN=1, FUN=mean)!=0)->plotlist
+	for(l in 1:length(plotlist)){
+		
+		## which columns in the density dataframe have nozero values for species l ?
+		cols<-which(dens[l,]>0)
+		
+		
+		x<-dens[l,cols]
+		y<-rate[cols]
+		
+		
+		##add lambdas:
+		x<-c(x, rep(0,nrow(lam_points)))
+		y<-c(y, lam_points$rate)
+		
+		x_det<-seq(min(x), max(x), by=(  (max(x)-min(x))/1000  ))
+		
+		alpha_temp<-alphas[which(names(alphas)==plotlist[l])]
+		y_pred<-lambda/(1 + alpha_temp*x_det)
+		
+		if(length(unique(x))>1){
+			plot(y~x, xlab="density", ylab="rate", main=plotlist[l])
+			} else {
+				
+				plot(x=0, y=0, main=plotlist[l], type='n')
+				text(0, 0, "no data")
+				
+			}
+		
+		lines(y_pred~x_det, col="red", lwd=2)	
+	}
+	
+}
+
+dev.off()
+
+results_same_time<-data.frame(splist, lambda_est, lower_lambda, upper_lambda, sigma_est, convergence_code)
+
+names(results_same_time)<-c("species", "lambda", "lower_error", "upper error", "sigma", "convergence_code")
+alpha_matrix_same_time<-alpha_matrix
+lower_alpha_same_time<-lower_alpha
+upper_alpha_same_time<-upper_alpha
+
+write.csv(results_same_time, "./Estimate_Lambda_fixed_allTreats/lambda_estimates_all_together.csv")
+write.csv(alpha_matrix, "./Estimate_Lambda_fixed_allTreats/alpha_estimates_row_is_target_all_together.csv")
+write.csv(lower_alpha, "./Estimate_Lambda_fixed_allTreats/alpha_lower_errors_all_together.csv")
+write.csv(upper_alpha, "./Estimate_Lambda_fixed_allTreats/alpha_upper_errors_all_together.csv")
+
+```
+
+## Analyses for both at the same time
+
+```{r}
+lambda_values<-results_same_time# here I am just saving the lambdas estimated from all the data
+################################################
+## get a list of target species to work through sequentially:
+splist<-unique(comp$Species)
+
+##alpha order splist:
+
+splist<-splist[order(splist)]
+
+## objects to hold the final parameter estimates from model 3:
+
+alpha_matrix<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(alpha_matrix)<-splist
+colnames(alpha_matrix)<-splist
+lambda_est<-NULL
+sigma_est<-NULL
+convergence_code<-NULL
+
+upper_lambda <-NULL
+lower_lambda <-NULL
+
+lower_alpha<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(lower_alpha)<-splist
+colnames(lower_alpha)<-splist
+
+upper_alpha<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(upper_alpha)<-splist
+colnames(upper_alpha)<-splist
+
+```
+
+
+#### Generating pdf
+```{r}
+pdf(file="./Estimate_Lambda_fixed_allTreats/alphas_and_lambdas_same_time.pdf", width=11, height=8)
+## for each species in turn as a target:
+
+for(i in 1:length(splist)){
+
+	#set up grid for plotting and add first panel indiciating focal sp:
+	layout(matrix(1:2, nrow=2))
+	plot(x=0, y=0, type='n')
+	text(0, 0, paste(splist[i], "as focal", sep=" "), cex=1, col="red")
+	
+	
+	## subset out the rows that are needed from the competition df
+	comp_points<-subset(comp_both, comp_both$Species==splist[i], drop=TRUE)
+	
+	## and the correct lambda plants
+	
+	lam_points<-subset(lam, lam$Species==splist[i])
+	
+	## now need to build up a vector of nonzero seed production
+	## and corresponding density vectors (held in a matrix) for background species 
+	## to use in model fitting
+	
+	## start with the lambda rate- will add on to this for each background:
+	
+	rate<-lam_points$rate
+	
+	
+	##build density matrix (each row will be density of a species)
+	dens<-matrix(0, nrow=length(splist), ncol=(nrow(lam_points)+ nrow(comp_points)))
+	row.names(dens)<-splist
+	
+	
+	##for each background species the target competes against:
+	background_list<-unique(comp_points$background)
+	
+	## use this counter to keep track of which column is next to have data added to
+	## set it to begin after the lambda points:
+	
+	start <- nrow(lam_points) +1
+	
+
+	for(j in 1:length(background_list)){
+		## LOOP creates a rate vector and a corresponding dens ("density") matrix with 
+		## background species as rows, and columns corresponding to the seed production
+		## vector.
+		## beginning columns correspond to lambda plants
+		
+		#take just the rows pertaining to a specific background sp:
+		bg_points<- subset(comp_points, comp_points$background==background_list[j])
+		
+		## which row of the density matrix corresponds?
+		#The inter
+		rownum <- which(row.names(dens)==background_list[j])
+		#The intra
+		rownumIntra<-splist[j]
+		#column to end with:
+		
+		end<-start + nrow(bg_points)-1
+		
+		## drop in density values into matrix:
+		
+		dens[rownum, start:end]<-bg_points$neighbours_number
+		dens[rownumIntra, start:end]<-bg_points$neighbours_numberIntra
+		
+		## add seed numbers into the rate vector
+		
+		rate<-c(rate, bg_points$rate)
+
+		##increase start counter so that next species is offset from this one
+		start<-end+1
+	}
+	#rownum <- which(row.names(dens)==splist[i])
+	#dens[rownum, 1:length(lam_points[,1])]<-lam_points$neighbours_number
+	dens
+	## should now have "rate" vector and corresponding "dens"ity matrix
+	## can test ncol(dens)==length(rate)
+	
+	## we'll be working with log rate (for giving a lognormal error structure):
+		
+	log_rate<-log(rate+1)
+	
+	
+	#model fitting using optim and earlier likelihood functions
+
+	#############################
+	## model 5, unique lambda  ##
+	#############################
+	
+	## pars here are lambda, alphas and sigma- use lambda and sigma from model 2, and alphas from model 2 as starting esimtate for each species
+	
+		if(splist[i]=="Te"){
+	  par6<-c(0.01 , lambda_values[1,5])
+	}else{
+	  par6<-c(0.01, lambda_values[2,5])
+	}
+	
+		##as before
+	for(k in 1:25){
+		##now using a specific method that permits constained optimization so that alpha has to be nonzero- 
+		testcomp6<-optim(par6,data=log_rate, dens=dens, fn=compmodel6, method="L-BFGS-B", lower=c(0,0.0000000001), control=list(maxit=5000), hessian=T)
+		par6<-testcomp6$par
+		if(testcomp6$convergence==0){
+			print(paste(splist[i], "model 6 converged on rep", k, sep=" "))
+			break
+			}
+	}
+	
+		
+  par7<-c(testcomp6$par[1], testcomp6$par[1] , testcomp6$par[2])
+	
+		##as before
+	for(k in 1:25){
+		##now using a specific method that permits constained optimization so that alpha has to be nonzero- 
+		testcomp7<-optim(par7,data=log_rate, dens=dens, fn=compmodel7, method="L-BFGS-B", lower=c(0,0,0.0000000001), control=list(maxit=5000), hessian=T)
+		par7<-testcomp7$par
+		if(testcomp7$convergence==0){
+			print(paste(splist[i], "model 7 converged on rep", k, sep=" "))
+			break
+			}
+		}
+	
+	##################################
+	### save estimates from model 3 ##
+	##################################
+	
+	sigma_est<-c(sigma_est, testcomp7$par[3])
+	convergence_code<-c(convergence_code, testcomp7$convergence)
+	
+	fisher_info<-solve(testcomp7$hessian)
+	prop_sigma<-sqrt(diag(fisher_info))
+	upper<-testcomp7$par+1.96*prop_sigma
+	lower<-testcomp7$par-1.96*prop_sigma
+	
+	
+	## in keeping with Lotka Volterra notation, we'll use alpha1_2 to indicate effect of
+	## sp 2 on growth of 1.  Following convention, i refers to rows and j to cols in a matrix
+	## so each step of the loop here (for a target sp) corresponds to one row of this matrix:
+	
+	alphas<-testcomp7$par[1:2]
+	alpha_matrix[i,]<-alphas
+	
+	errors_lower_alpha <-lower[1:2]
+	lower_alpha[i,] <- errors_lower_alpha
+	errors_upper_alpha <-upper[1:2]
+	upper_alpha[i,] <- errors_upper_alpha
+	
+	##note that in cases where there is no data for a particular species the alpha estimate for that species ends up as the starting value- we need to be careful of these as they are basically gargbage numbers.  Keeping them in up to now to keep the structure of the data constant, but will set them to NA here:
+	
+	#identify which species have no data in this fit:
+	which(apply(dens, MARGIN=1, FUN=mean)==0)->no_data
+	
+	## set their alphas to NA in the matrix:
+	
+	alpha_matrix[i,no_data]<-NA
+	
+	
+	
+	###############################
+	## some diagnostics##
+	###############################
+	
+	## print an error to the console if any one of the three models failed to converge:
+	
+	if(testcomp7$convergence !=0){print(paste("model 6 did not converge for", splist[i], sep=" "))}
+	
+	
+}
+
+dev.off()
+
+alpha_matrix_same_time<-alpha_matrix
+lower_alpha_same_time<-lower_alpha
+upper_alpha_same_time<-upper_alpha
+
+write.csv(alpha_matrix, "./Estimate_Lambda_fixed_allTreats/alpha_estimates_row_is_target_same_time.csv")
+write.csv(lower_alpha, "./Estimate_Lambda_fixed_allTreats/alpha_lower_errors_same_time.csv")
+write.csv(upper_alpha, "./Estimate_Lambda_fixed_allTreats/alpha_upper_errors_same_time.csv")
+
+```
+
+
+## Analyses for Te first
+
+```{r}
+
+################################################
+## get a list of target species to work through sequentially:
+splist<-unique(comp$Species)
+
+##alpha order splist:
+
+splist<-splist[order(splist)]
+
+## objects to hold the final parameter estimates from model 3:
+
+alpha_matrix<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(alpha_matrix)<-splist
+colnames(alpha_matrix)<-splist
+lambda_est<-NULL
+sigma_est<-NULL
+convergence_code<-NULL
+
+upper_lambda <-NULL
+lower_lambda <-NULL
+
+lower_alpha<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(lower_alpha)<-splist
+colnames(lower_alpha)<-splist
+
+upper_alpha<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(upper_alpha)<-splist
+colnames(upper_alpha)<-splist
+
+```
+
+
+#### Generating pdf
+```{r}
+pdf(file="./Estimate_Lambda_fixed_allTreats/alphas_and_lambdas_Tefirst.pdf", width=11, height=8)
+## for each species in turn as a target:
+
+for(i in 1:length(splist)){
+
+	#set up grid for plotting and add first panel indiciating focal sp:
+	layout(matrix(1:2, nrow=2))
+	plot(x=0, y=0, type='n')
+	text(0, 0, paste(splist[i], "as focal", sep=" "), cex=1, col="red")
+	
+	
+	## subset out the rows that are needed from the competition df
+	comp_points<-subset(comp_te, comp_te$Species==splist[i], drop=TRUE)
+	
+	## and the correct lambda plants
+	
+	lam_points<-subset(lam, lam$Species==splist[i])
+	
+	## now need to build up a vector of nonzero seed production
+	## and corresponding density vectors (held in a matrix) for background species 
+	## to use in model fitting
+	
+	## start with the lambda rate- will add on to this for each background:
+	
+	rate<-lam_points$rate
+	
+	
+	##build density matrix (each row will be density of a species)
+	dens<-matrix(0, nrow=length(splist), ncol=(nrow(lam_points)+ nrow(comp_points)))
+	row.names(dens)<-splist
+	
+	
+	##for each background species the target competes against:
+	background_list<-unique(comp_points$background)
+	
+	## use this counter to keep track of which column is next to have data added to
+	## set it to begin after the lambda points:
+	
+	start <- nrow(lam_points) +1
+	
+
+	for(j in 1:length(background_list)){
+		## LOOP creates a rate vector and a corresponding dens ("density") matrix with 
+		## background species as rows, and columns corresponding to the seed production
+		## vector.
+		## beginning columns correspond to lambda plants
+		
+		#take just the rows pertaining to a specific background sp:
+		bg_points<- subset(comp_points, comp_points$background==background_list[j])
+		
+		## which row of the density matrix corresponds?
+		#The inter
+		rownum <- which(row.names(dens)==background_list[j])
+		#The intra
+		rownumIntra<-splist[j]
+		#column to end with:
+		
+		end<-start + nrow(bg_points)-1
+		
+		## drop in density values into matrix:
+		
+		dens[rownum, start:end]<-bg_points$neighbours_number
+		dens[rownumIntra, start:end]<-bg_points$neighbours_numberIntra
+		
+		## add seed numbers into the rate vector
+		
+		rate<-c(rate, bg_points$rate)
+
+		##increase start counter so that next species is offset from this one
+		start<-end+1
+	}
+	#rownum <- which(row.names(dens)==splist[i])
+	#dens[rownum, 1:length(lam_points[,1])]<-lam_points$neighbours_number
+	dens
+	## should now have "rate" vector and corresponding "dens"ity matrix
+	## can test ncol(dens)==length(rate)
+	
+	## we'll be working with log rate (for giving a lognormal error structure):
+		
+	log_rate<-log(rate+1)
+	
+	
+	#model fitting using optim and earlier likelihood functions
+
+	#############################
+	## model 5, unique lambda  ##
+	#############################
+	
+	if(splist[i]=="Te"){
+	  par6<-c(0.01 , lambda_values[1,5])
+	}else{
+	  par6<-c(0.01, lambda_values[2,5])
+	}
+	
+		##as before
+	for(k in 1:25){
+		##now using a specific method that permits constained optimization so that alpha has to be nonzero- 
+		testcomp6<-optim(par6,data=log_rate, dens=dens, fn=compmodel6, method="L-BFGS-B", lower=c(0,0.0000000001), control=list(maxit=5000), hessian=T)
+		par6<-testcomp6$par
+		if(testcomp6$convergence==0){
+			print(paste(splist[i], "model 6 converged on rep", k, sep=" "))
+			break
+			}
+	}
+	
+		
+  par7<-c(testcomp6$par[1], testcomp6$par[1] , testcomp6$par[2])
+	
+		##as before
+	for(k in 1:25){
+		##now using a specific method that permits constained optimization so that alpha has to be nonzero- 
+		testcomp7<-optim(par7,data=log_rate, dens=dens, fn=compmodel7, method="L-BFGS-B", lower=c(0,0,0.0000000001), control=list(maxit=5000), hessian=T)
+		par7<-testcomp7$par
+		if(testcomp7$convergence==0){
+			print(paste(splist[i], "model 7 converged on rep", k, sep=" "))
+			break
+			}
+		}
+	
+	##################################
+	### save estimates from model 3 ##
+	##################################
+	
+	sigma_est<-c(sigma_est, testcomp7$par[3])
+	convergence_code<-c(convergence_code, testcomp7$convergence)
+	
+	fisher_info<-solve(testcomp7$hessian)
+	prop_sigma<-sqrt(diag(fisher_info))
+	upper<-testcomp7$par+1.96*prop_sigma
+	lower<-testcomp7$par-1.96*prop_sigma
+	
+	
+	## in keeping with Lotka Volterra notation, we'll use alpha1_2 to indicate effect of
+	## sp 2 on growth of 1.  Following convention, i refers to rows and j to cols in a matrix
+	## so each step of the loop here (for a target sp) corresponds to one row of this matrix:
+	
+	alphas<-testcomp7$par[1:2]
+	alpha_matrix[i,]<-alphas
+	
+	errors_lower_alpha <-lower[1:2]
+	lower_alpha[i,] <- errors_lower_alpha
+	errors_upper_alpha <-upper[1:2]
+	upper_alpha[i,] <- errors_upper_alpha
+	
+	##note that in cases where there is no data for a particular species the alpha estimate for that species ends up as the starting value- we need to be careful of these as they are basically gargbage numbers.  Keeping them in up to now to keep the structure of the data constant, but will set them to NA here:
+	
+	#identify which species have no data in this fit:
+	which(apply(dens, MARGIN=1, FUN=mean)==0)->no_data
+	
+	## set their alphas to NA in the matrix:
+	
+	alpha_matrix[i,no_data]<-NA
+	
+	
+	
+	###############################
+	## some diagnostics##
+	###############################
+	
+	## print an error to the console if any one of the three models failed to converge:
+	
+	if(testcomp7$convergence !=0){print(paste("model 6 did not converge for", splist[i], sep=" "))}
+	
+	
+}
+
+dev.off()
+
+alpha_matrix_Te_first<-alpha_matrix
+lower_alpha_Te_first<-lower_alpha
+upper_alpha_Te_first<-upper_alpha
+
+write.csv(alpha_matrix, "./Estimate_Lambda_fixed_allTreats/alpha_estimates_row_is_target_Te_first.csv")
+write.csv(lower_alpha, "./Estimate_Lambda_fixed_allTreats/alpha_lower_errors_Te_first.csv")
+write.csv(upper_alpha, "./Estimate_Lambda_fixed_allTreats/alpha_upper_errors_Te_first.csv")
+
+```
+
+
+## Analyses for Tu first
+```{r}
+
+################################################
+## get a list of target species to work through sequentially:
+splist<-unique(comp$Species)
+
+##alpha order splist:
+
+splist<-splist[order(splist)]
+
+## objects to hold the final parameter estimates from model 3:
+
+alpha_matrix<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(alpha_matrix)<-splist
+colnames(alpha_matrix)<-splist
+lambda_est<-NULL
+sigma_est<-NULL
+convergence_code<-NULL
+
+upper_lambda <-NULL
+lower_lambda <-NULL
+
+lower_alpha<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(lower_alpha)<-splist
+colnames(lower_alpha)<-splist
+
+upper_alpha<- matrix(0, nrow=length(splist), ncol=length(splist))
+row.names(upper_alpha)<-splist
+colnames(upper_alpha)<-splist
+
+```
+
+
+#### Generating pdf
+```{r}
+pdf(file="./Estimate_Lambda_fixed_allTreats/alphas_and_lambdas_Tufirst.pdf", width=11, height=8)
+## for each species in turn as a target:
+
+for(i in 1:length(splist)){
+	
+	#set up grid for plotting and add first panel indiciating focal sp:
+	layout(matrix(1:2, nrow=2))
+	plot(x=0, y=0, type='n')
+	text(0, 0, paste(splist[i], "as focal", sep=" "), cex=1, col="red")
+	
+	
+	## subset out the rows that are needed from the competition df
+	comp_points<-subset(comp_tu, comp_tu$Species==splist[i], drop=TRUE)
+	
+	## and the correct lambda plants
+	
+	lam_points<-subset(lam, lam$Species==splist[i])
+	
+	## now need to build up a vector of nonzero seed production
+	## and corresponding density vectors (held in a matrix) for background species 
+	## to use in model fitting
+	
+	## start with the lambda rate- will add on to this for each background:
+	
+	rate<-lam_points$rate
+
+	
+	##build density matrix (each row will be density of a species)
+	dens<-matrix(0, nrow=length(splist), ncol=(nrow(lam_points)+ nrow(comp_points)))
+	row.names(dens)<-splist
+	
+	
+	##for each background species the target competes against:
+	background_list<-unique(comp_points$background)
+	
+	## use this counter to keep track of which column is next to have data added to
+	## set it to begin after the lambda points:
+	
+	start <- nrow(lam_points) +1
+	
+		for(j in 1:length(background_list)){
+		## LOOP creates a rate vector and a corresponding dens ("density") matrix with 
+		## background species as rows, and columns corresponding to the seed production
+		## vector.
+		## beginning columns correspond to lambda plants
+		
+		#take just the rows pertaining to a specific background sp:
+		bg_points<- subset(comp_points, comp_points$background==background_list[j])
+		
+		## which row of the density matrix corresponds?
+		#The inter
+		rownum <- which(row.names(dens)==background_list[j])
+		#The intra
+		rownumIntra<-splist[j]
+		#column to end with:
+		
+		end<-start + nrow(bg_points)-1
+		
+		## drop in density values into matrix:
+		
+		dens[rownum, start:end]<-bg_points$neighbours_number
+		dens[rownumIntra, start:end]<-bg_points$neighbours_numberIntra
+		
+		## add seed numbers into the rate vector
+		
+		rate<-c(rate, bg_points$rate)
+
+		##increase start counter so that next species is offset from this one
+		start<-end+1
+		
+	
+	}
+	#rownum <- which(row.names(dens)==splist[i])
+	#dens[rownum, 1:length(lam_points[,1])]<-lam_points$neighbours_number
+	dens
+	## should now have "rate" vector and corresponding "dens"ity matrix
+	## can test ncol(dens)==length(rate)
+	
+	## we'll be working with log rate (for giving a lognormal error structure):
+		
+	log_rate<-log(rate+1)
+	
+	
+	#############################
+	## model 5, unique lambda  ##
+	#############################
+	
+		if(splist[i]=="Te"){
+	  par6<-c(0.01 , lambda_values[1,5])
+	}else{
+	  par6<-c(0.01, lambda_values[2,5])
+	}
+	
+		##as before
+	for(k in 1:25){
+		##now using a specific method that permits constained optimization so that alpha has to be nonzero- 
+		testcomp6<-optim(par6,data=log_rate, dens=dens, fn=compmodel6, method="L-BFGS-B", lower=c(0,0.0000000001), control=list(maxit=5000), hessian=T)
+		par6<-testcomp6$par
+		if(testcomp6$convergence==0){
+			print(paste(splist[i], "model 6 converged on rep", k, sep=" "))
+			break
+			}
+	}
+	
+		
+  par7<-c(testcomp6$par[1], testcomp6$par[1] , testcomp6$par[2])
+	
+		##as before
+	for(k in 1:25){
+		##now using a specific method that permits constained optimization so that alpha has to be nonzero- 
+		testcomp7<-optim(par7,data=log_rate, dens=dens, fn=compmodel7, method="L-BFGS-B", lower=c(0,0,0.0000000001), control=list(maxit=5000), hessian=T)
+		par7<-testcomp7$par
+		if(testcomp7$convergence==0){
+			print(paste(splist[i], "model 7 converged on rep", k, sep=" "))
+			break
+			}
+		}
+	
+	##################################
+	### save estimates from model 3 ##
+	##################################
+	
+	sigma_est<-c(sigma_est, testcomp7$par[3])
+	convergence_code<-c(convergence_code, testcomp7$convergence)
+	
+	fisher_info<-solve(testcomp7$hessian)
+	prop_sigma<-sqrt(diag(fisher_info))
+	upper<-testcomp7$par+1.96*prop_sigma
+	lower<-testcomp7$par-1.96*prop_sigma
+	
+	
+	## in keeping with Lotka Volterra notation, we'll use alpha1_2 to indicate effect of
+	## sp 2 on growth of 1.  Following convention, i refers to rows and j to cols in a matrix
+	## so each step of the loop here (for a target sp) corresponds to one row of this matrix:
+	
+	alphas<-testcomp7$par[1:2]
+	alpha_matrix[i,]<-alphas
+	
+	errors_lower_alpha <-lower[1:2]
+	lower_alpha[i,] <- errors_lower_alpha
+	errors_upper_alpha <-upper[1:2]
+	upper_alpha[i,] <- errors_upper_alpha
+	
+	##note that in cases where there is no data for a particular species the alpha estimate for that species ends up as the starting value- we need to be careful of these as they are basically gargbage numbers.  Keeping them in up to now to keep the structure of the data constant, but will set them to NA here:
+	
+	#identify which species have no data in this fit:
+	which(apply(dens, MARGIN=1, FUN=mean)==0)->no_data
+	
+	## set their alphas to NA in the matrix:
+	
+	alpha_matrix[i,no_data]<-NA
+	
+	
+	
+	###############################
+	## some diagnostics##
+	###############################
+	
+	## print an error to the console if any one of the three models failed to converge:
+	
+	if(testcomp7$convergence !=0){print(paste("model 6 did not converge for", splist[i], sep=" "))}
+	
+	
+}
+
+dev.off()
+
+alpha_matrix_Tu_first<-alpha_matrix
+lower_alpha_Tu_first<-lower_alpha
+upper_alpha_Tu_first<-upper_alpha
+
+write.csv(alpha_matrix, "./Estimate_Lambda_fixed_allTreats/alpha_estimates_row_is_target_Tu_first.csv")
+write.csv(lower_alpha, "./Estimate_Lambda_fixed_allTreats/alpha_lower_errors_Tu_first.csv")
+write.csv(upper_alpha, "./Estimate_Lambda_fixed_allTreats/alpha_upper_errors_Tu_first.csv")
+
+
+```
+
+## Converting to a single matrix 
+This makes it easier for me to then run the plots on the statistical analysis
+
+```{r}
+results_all<- expand.grid(Species=c("Te", "Tu"), Arrival=c("same time", "Te first", "Tu first"), Comp=c("Inter", "Intra"))
+results_all$Lambda<-0
+results_all$Lambda_Upper<-0
+results_all$Lambda_Lower<-0
+results_all$Alpha<-0
+results_all$Alpha_Upper<-0
+results_all$Alpha_Lower<-0
+
+results_all[c(1,2,7,8),c(4,6,5)] <-lambda_values[1:2, 2:4]
+results_all[c(3,4,9,10),c(4,6,5)] <-lambda_values[1:2, 2:4]
+results_all[c(5,6,11,12),c(4,6,5)] <-lambda_values[1:2, 2:4]
+
+#alpha
+results_all[7,7]<-alpha_matrix_same_time[1,1]
+results_all[8,7]<-alpha_matrix_same_time[2,2]
+results_all[1,7]<-alpha_matrix_same_time[1,2]
+results_all[2,7]<-alpha_matrix_same_time[2,1]
+
+results_all[9,7]<-alpha_matrix_Te_first[1,1]
+results_all[10,7]<-alpha_matrix_Te_first[2,2]
+results_all[3,7]<-alpha_matrix_Te_first[1,2]
+results_all[4,7]<-alpha_matrix_Te_first[2,1]
+
+results_all[11,7]<-alpha_matrix_Tu_first[1,1]
+results_all[12,7]<-alpha_matrix_Tu_first[2,2]
+results_all[5,7]<-alpha_matrix_Tu_first[1,2]
+results_all[6,7]<-alpha_matrix_Tu_first[2,1]
+
+## upper alpha
+results_all[7,8]<-upper_alpha_same_time[1,1]
+results_all[8,8]<-upper_alpha_same_time[2,2]
+results_all[1,8]<-upper_alpha_same_time[1,2]
+results_all[2,8]<-upper_alpha_same_time[2,1]
+
+results_all[9,8]<-upper_alpha_Te_first[1,1]
+results_all[10,8]<-upper_alpha_Te_first[2,2]
+results_all[3,8]<-upper_alpha_Te_first[1,2]
+results_all[4,8]<-upper_alpha_Te_first[2,1]
+
+results_all[11,8]<-upper_alpha_Tu_first[1,1]
+results_all[12,8]<-upper_alpha_Tu_first[2,2]
+results_all[5,8]<-upper_alpha_Tu_first[1,2]
+results_all[6,8]<-upper_alpha_Tu_first[2,1]
+  
+## lower alpha
+results_all[7,9]<-lower_alpha_same_time[1,1]
+results_all[8,9]<-lower_alpha_same_time[2,2]
+results_all[1,9]<-lower_alpha_same_time[1,2]
+results_all[2,9]<-lower_alpha_same_time[2,1]
+
+results_all[9,9]<-lower_alpha_Te_first[1,1]
+results_all[10,9]<-lower_alpha_Te_first[2,2]
+results_all[3,9]<-lower_alpha_Te_first[1,2]
+results_all[4,9]<-lower_alpha_Te_first[2,1]
+
+results_all[11,9]<-lower_alpha_Tu_first[1,1]
+results_all[12,9]<-lower_alpha_Tu_first[2,2]
+results_all[5,9]<-lower_alpha_Tu_first[1,2]
+results_all[6,9]<-lower_alpha_Tu_first[2,1]
+  
+  
+results_all
+
+write.csv(results_all,"./Estimate_Lambda_fixed_allTreats/Results_all.csv", col.names = TRUE, row.names = FALSE)
+
+
+```
+# Estimating coexistence
+
+```{r}
+
+df_alpha_lambda<-read.csv("./Estimate_Lambda_fixed_allTreats/Results_all.csv", header=TRUE)
+
+
+ggplot(df_alpha_lambda, aes(x=Comp, y=Alpha, colour=Arrival, fill=Arrival))+
+  facet_grid(.~Species)+
+  geom_errorbar(aes(ymin=Alpha_Lower, ymax=Alpha_Upper), position=position_dodge(0.5), size=0.75)+
+  geom_point(size=2, position=position_dodge(0.5), shape=21, colour="black")+
+  geom_line(aes(group=Arrival), position=position_dodge2(0.5))+
+  scale_colour_manual(values = c("#4575b4","#d73027", "#fee090"))+
+  scale_fill_manual(values =c("#4575b4","#d73027", "#fee090"))+
+  theme_ines+
+  ylab("Competitive ability")+
+  xlab("")+
+  theme(legend.position = "bottom")
+save_plot("./Estimate_Lambda_fixed_allTreats/alpha.pdf")
+
+ggplot(df_alpha_lambda, aes(x=Species, y=Lambda, colour=Arrival, fill=Arrival))+
+   geom_hline(yintercept =2, colour="lightgray")+
+  geom_hline(yintercept =3.5, colour="lightgray")+
+  geom_errorbar(aes(ymin=Lambda_Lower, ymax=Lambda_Upper), position=position_dodge(0.5), size=0.75)+
+  geom_point(size=2, position=position_dodge(0.5), shape=21, colour="black")+
+  scale_colour_manual(values = c("#4575b4","#d73027", "#fee090"))+
+  scale_fill_manual(values = c("#4575b4","#d73027", "#fee090"))+
+  theme_ines+
+  ylab("Lambda Growth Rate")+
+  xlab("")+
+  theme(legend.position = "bottom")
+save_plot("./Estimate_Lambda_fixed_allTreats/lambda.pdf")
+
+ggplot(subset(df_alpha_lambda, Arrival=="same time"), aes(x=Species, y=Lambda))+
+  geom_errorbar(aes(ymin=Lambda_Lower, ymax=Lambda_Upper), position=position_dodge(0.5), size=0.1)+
+  geom_point(size=3, position=position_dodge(0.5), shape=21, colour="black", fill="black")+
+  theme_ines+
+  ylab("Lambda Growth Rate")+
+  xlab("")+
+  theme(legend.position = "bottom")
+save_plot("./Estimate_Lambda_fixed_allTreats/lambda1.pdf")
+
+coex_df2<-as.data.frame(matrix(nrow=3, ncol=7))
+colnames(coex_df2)<-c("Treatment", "NO", "NO_L", "NO_U", "FD", "FD_L","FD_U")
+
+coex_df2$Treatment<-c("same time","Te first","Tu first")
+str(coex_df2)
+str(df_alpha_lambda)
+head(df_alpha_lambda)
+
+subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+### Important!
+#The order here is Te inter (aji), Tu inter (aij), Te intra (ajj), Tu intra (aii) for each treatment
+
+coex_df2$NO<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  nd<-(sqrt(aux$Alpha[2]/aux$Alpha[3]* aux$Alpha[1]/aux$Alpha[4]))
+  
+  nd
+})
+
+coex_df2$NO_L<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  nd<- sqrt(aux$Alpha_Lower[2]/aux$Alpha_Lower[3]* aux$Alpha_Lower[1]/aux$Alpha_Lower[4])
+  
+  nd
+})
+
+coex_df2$NO_U<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  nd<-(sqrt(aux$Alpha_Upper[2]/aux$Alpha_Upper[3]* aux$Alpha_Upper[1]/aux$Alpha_Upper[4]))
+  
+  nd
+})
+
+#fd= ((nj-1)/(ni-1))* sqrt(aij/ajj * aii/aji)
+
+coex_df2$FD<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #The order here is Te inter (aji), Tu inter (aij), Te intra (ajj), Tu intra (aii) 
+  fd<-((aux$Lambda[1]-1)/(aux$Lambda[2]-1))*(sqrt(aux$Alpha[2]/aux$Alpha[3])* sqrt(aux$Alpha[4]/aux$Alpha[1]))
+  
+  fd
+})
+
+coex_df2$FD_L<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  fd<-((aux$Lambda_Lower[1]-1)/(aux$Lambda_Lower[2]-1))*(sqrt(aux$Alpha_Lower[2]/aux$Alpha_Lower[3])* sqrt(aux$Alpha_Lower[4]/aux$Alpha_Lower[1]))
+  
+  fd
+})
+
+coex_df2$FD_U<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  fd<-((aux$Lambda_Upper[1]-1)/(aux$Lambda_Upper[2]-1))*(sqrt(aux$Alpha_Upper[2]/aux$Alpha_Upper[3])* sqrt(aux$Alpha_Upper[4]/aux$Alpha_Upper[1]))
+  
+  fd
+})
+
+
+coex_df2$ND<-1-coex_df2$NO
+coex_df2$ND_L<-1-coex_df2$NO_L
+coex_df2$ND_U<-1-coex_df2$NO_U
+
+bound_df<-data.frame(niche_overlap=c(seq(0,3, 0.05))) # creating a vector with niche overlap
+bound_df$niche_diff<-(1-bound_df$niche_overlap) # calculating stabilizating differences from niche overlap 1-rho
+bound_df$fitness_differences_sp_1<-(1/bound_df$niche_overlap) # solid line in your graph this is ok
+bound_df$fitness_differences_sp_temp<- 1-bound_df$fitness_differences_sp_1 #this is an intermediate step to see the differences above one 
+#which is later incorporated into the 2 species
+bound_df$fitness_differences_sp_2<- 1+ bound_df$fitness_differences_sp_temp# dashed line in your graph which is NOT OK in your original graph
+#Here I added the difference calculated in the previous step to make the curves simetric. they must be simmetric!
+#otherwise one species has more chance of priority effects than the other.
+bound_df<-bound_df[, -4]
+#remove the intermediate step 
+str(bound_df)
+colnames(bound_df)<-c("NO", "ND", "FD", "FD2")
+
+ggplot(coex_df2,aes(x=ND, y=FD, colour=Treatment) )+
+  geom_hline(yintercept = 1 ,colour="lightgray")+
+  geom_vline(xintercept = 0 , colour="lightgray")+
+  geom_ribbon(data=bound_df, aes(x=ND, ymin=FD,ymax=FD2), colour="Black", fill="lightgrey", alpha=0.5)+
+  geom_line(data=bound_df, aes(x=ND, y=FD), colour="black")+
+  geom_line(data=bound_df, aes(x=ND, y=FD2),colour="black")+
+  geom_errorbar(data=coex_df2, aes(ymin=FD_L, ymax=FD_U), colour="black", width=0.1)+
+  geom_errorbarh(data=coex_df2, aes(xmin=ND_L, xmax=ND_U), colour="black", height=0.1)+
+  geom_point(data=coex_df2, size=2.75, shape=21, aes(fill=Treatment), colour="black")+
+  ylab(c(""))+
+  xlab(c(""))+
+  #scale_x_discrete(labels=c())+
+  scale_colour_manual(values = c("#4575b4","#d73027", "#fee090"), name="")+
+  scale_fill_manual(values = c("#4575b4","#d73027", "#fee090"), name="")+
+  scale_x_continuous(breaks = seq(-1,1, 0.2), expand=expansion(c(0,0)), limits = c(-1, 1))+
+  ylim(c(-1.5,5))+
+  theme_bw()+
+  theme_ines+
+  theme(legend.position = c(0.92,0.92), legend.background = element_rect(fill=NA), legend.text = element_text(size=10), axis.text = element_text(colour="black"))+
+  geom_richtext(label="<span style='color:black'>Priority effects", x=-0.85, y=1.1, size=4.5, color=NA, fill=NA)+
+  geom_richtext(label="<span style='color:black'>*T. urticae* excluded", x=0, y=2.5, size=4.5, color=NA, fill=NA)+
+  geom_richtext(label="<span style='color:black'>*T. evansi* excluded", x=0, y=0.1, size=4.5, color=NA, fill=NA)+
+  geom_richtext(label="<span style='color:black'>Coexistence", x=0.56, y=1.1, size=4.5, color=NA, fill=NA)+
+  expand_limits(x = c(-1, 0.75), y = 0)+
+  coord_cartesian(ylim = c(0.2, 5), xlim = c(-1,0.7))
+  save_plot("./Estimate_Lambda_fixed_allTreats/coex.pdf", width=17.5, height=17.5)
+  
+
+```
+
+
+
+

@@ -1,0 +1,1378 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+#Functions and packages
+```{r include=FALSE}
+
+library(relaimpo)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(reshape2)
+library(gridExtra)
+library(cowplot)
+library(lme4)
+library(car)
+library(doBy)
+library(bipartite)
+library(lmerTest)
+library(tidyverse)
+library(ggforce)
+library(ggpubr)
+library(ggeffects)
+library(viridis)
+library(viridisLite)
+library(phia)
+library(jtools)
+library(EcoSimR)
+library(cooccur)
+library(fitdistrplus)
+
+  
+theme_ines<-theme(axis.text = element_text(size=14), axis.title = element_text(size=14, face="bold"), legend.text = element_text(size=12), strip.text = element_text(size=14), plot.title = element_text(size=14, face="bold"), panel.grid=element_line(colour="white"), panel.background = element_rect(fill="white") , axis.line = element_line(size = 0.5, linetype = "solid",
+                                   colour = "black"), strip.background = element_rect(fill="white"))
+
+save_plot<-function(dir, width=15, height=10, ...){
+  ggsave(dir, width = width, height = height, units = c("cm"))
+}
+```
+
+# 1 - Importing data
+
+Importing coexistence data and the leaf age
+```{r include=FALSE}
+df<-read.csv("./Data/Coexistence_data_final_corr.csv", header=TRUE, row.names = NULL, as.is=c(2))
+
+
+leaf_conversion<-read.table("./Data/leaf_conversion.txt", header=TRUE, row.names = NULL, as.is=c(1,4))
+
+#converting leaf pairs to leaf age
+df$leaf_age<-sapply(c(1:length(df[,1])), function(x){
+  leaf_conversion$Age[which(as.character(leaf_conversion$Treatment)==as.character(df$Treatment[x]) & leaf_conversion$Box==df$Box[x] & leaf_conversion$Leaf==df$Leaf[x])]
+})
+
+# Mapping relative density and timing from treatment
+df$Density<-mapvalues(df$Treatment, as.character(levels(as.factor(df$Treatment))), c("10:10","10:10", "10:10", "19:1", "19:1", "1:19","1:19", "20:0", "0:20"))
+
+df$Timing<-mapvalues(df$Treatment, as.character(levels(as.factor(df$Treatment))), c("same time", "Tu first", "Te first", "same time", "Te first", "same time", "Tu first", "single", "single"))
+
+str(df)
+```
+
+### Calculating proportions and ratios
+
+```{r}
+df$ratio<-sapply(c(1:length(df[,1])), function(x){
+  #print(x)
+  if(df$Treatment[x]=="20Te" | df$Treatment[x]=="20Tu"){
+  a<-NA
+  }else{
+  if(df$Te[x]==0){
+    te<-1
+  }else{
+    te<-df$Te[x]
+  }
+  
+  if(df$Tu[x]==0){
+    tu<-1
+  }else{
+    tu<-df$Tu[x]
+  }
+    
+     a<-te/tu
+  }
+
+  a
+})
+
+
+df$Total<-sapply(c(1:length(df[,1])), function(x){
+  if(df$Treatment[x]=="20Te"){
+  a<-df$Te[x]
+  }else if(df$Treatment[x]=="20Tu"){
+    a<-df$Tu[x]
+  }else{
+     a<-df$Te[x]+df$Tu[x]
+  }
+
+  a
+})
+
+df$proportionTe<-sapply(c(1:length(df[,1])), function(x){
+  if(df$Treatment[x]=="20Tu"){
+  a<-0
+  }else if(df$Te[x]==0 |df$Total[x]==0 ){
+    a<-0
+    } else{
+    te<-df$Te[x]
+    a<-te/df$Total[x]
+  }
+
+  a
+})
+
+df$proportionTu<-sapply(c(1:length(df[,1])), function(x){
+  if(df$Treatment[x]=="20Te"){
+  a<-0
+  }else if(df$Tu[x]==0 |df$Total[x]==0 ){
+    a<-0
+    } else{
+    tu<-df$Tu[x]
+    a<-tu/df$Total[x]
+  }
+
+  a
+})
+
+```
+
+### Setting up data frame with data per box
+For the statistical analysis we will analyse data per box first. Here we are summing the number of individuals of each species per box - df_box
+To test a different distribution per leaf we will also create a data frame with number of individuals per leaf and per direction - df_box_leaf_dir
+
+```{r}
+df_box_leaf_dir<-df %>%
+  group_by(Treatment, Density, Timing , Block, Box, Direction,Leaf, leaf_age) %>%
+     summarise(Te=sum(Te, na.rm=TRUE), Tu=sum(Tu, na.rm=TRUE)) %>%
+  as.data.frame()
+
+df_box<-df %>%
+  group_by(Treatment,Density, Timing ,  Block, Box) %>%
+  summarise(Te=sum(Te, na.rm=TRUE), Tu=sum(Tu, na.rm=TRUE)) %>%
+  as.data.frame()
+
+head(df_box_leaf_dir)
+
+
+
+## Lets add our usual proportion information
+
+df_box$ratio<-sapply(c(1:length(df_box[,1])), function(x){
+  #print(x)
+  if(df_box$Treatment[x]=="20Te" | df_box$Treatment[x]=="20Tu"){
+  a<-NA
+  }else{
+  if(df_box$Te[x]==0){
+    te<-1
+  }else{
+    te<-df_box$Te[x]
+  }
+  
+  if(df_box$Tu[x]==0){
+    tu<-1
+  }else{
+    tu<-df_box$Tu[x]
+  }
+    
+     a<-te/tu
+  }
+
+  a
+})
+
+df_box_leaf_dir$ratio<-sapply(c(1:length(df_box_leaf_dir[,1])), function(x){
+  #print(x)
+  if(df_box_leaf_dir$Treatment[x]=="20Te" | df_box_leaf_dir$Treatment[x]=="20Tu"){
+  a<-NA
+  }else{
+  if(df_box_leaf_dir$Te[x]==0){
+    te<-1
+  }else{
+    te<-df_box_leaf_dir$Te[x]
+  }
+  
+  if(df_box_leaf_dir$Tu[x]==0){
+    tu<-1
+  }else{
+    tu<-df_box_leaf_dir$Tu[x]
+  }
+    
+     a<-te/tu
+  }
+
+  a
+})
+
+
+
+df_box_leaf_dir$Total<-sapply(c(1:length(df_box_leaf_dir[,1])), function(x){
+  if(df_box_leaf_dir$Treatment[x]=="20Te"){
+  a<-df_box_leaf_dir$Te[x]
+  }else if(df_box_leaf_dir$Treatment[x]=="20Tu"){
+    a<-df_box_leaf_dir$Tu[x]
+  }else{
+     a<-df_box_leaf_dir$Te[x]+df_box_leaf_dir$Tu[x]
+  }
+
+  a
+})
+
+
+df_box_leaf_dir$proportionTe<-sapply(c(1:length(df_box_leaf_dir[,1])), function(x){
+  if(df_box_leaf_dir$Treatment[x]=="20Tu"){
+  a<-0
+  }else if(df_box_leaf_dir$Te[x]==0 |df_box_leaf_dir$Total[x]==0 ){
+    a<-0
+    } else{
+    te<-df_box_leaf_dir$Te[x]
+    a<-te/df_box_leaf_dir$Total[x]
+  }
+
+  a
+})
+
+df_box_leaf_dir$proportionTu<-sapply(c(1:length(df_box_leaf_dir[,1])), function(x){
+  if(df_box_leaf_dir$Treatment[x]=="20Te"){
+  a<-0
+  }else if(df_box_leaf_dir$Tu[x]==0 |df_box_leaf_dir$Total[x]==0 ){
+    a<-0
+    } else{
+    tu<-df_box_leaf_dir$Tu[x]
+    a<-tu/df_box_leaf_dir$Total[x]
+  }
+
+  a
+})
+
+
+df_box$Total<-sapply(c(1:length(df_box[,1])), function(x){
+  if(df_box$Treatment[x]=="20Te"){
+  a<-df_box$Te[x]
+  }else if(df_box$Treatment[x]=="20Tu"){
+    a<-df_box$Tu[x]
+  }else{
+     a<-df_box$Te[x]+df_box$Tu[x]
+  }
+
+  a
+})
+
+
+df_box$proportionTe<-sapply(c(1:length(df_box[,1])), function(x){
+  if(df_box$Treatment[x]=="20Tu"){
+  a<-0
+  }else if(df_box$Te[x]==0 |df_box$Total[x]==0 ){
+    a<-0
+    } else{
+    te<-df_box$Te[x]
+    a<-te/df_box$Total[x]
+  }
+
+  a
+})
+
+df_box$proportionTu<-sapply(c(1:length(df_box[,1])), function(x){
+  if(df_box$Treatment[x]=="20Te"){
+  a<-0
+  }else if(df_box$Tu[x]==0 |df_box$Total[x]==0 ){
+    a<-0
+    } else{
+    tu<-df_box$Tu[x]
+    a<-tu/df_box$Total[x]
+  }
+
+  a
+})
+```
+
+### Checking distribution of data
+The variables that we are interested to know the distribution are: Te and Tu (because of the binomial analyses) 
+
+```{r}
+hist(df$Te)
+hist(df$Tu)
+
+descdist(df$Te[-which(is.na(df$Te/df$Total))], discrete = FALSE, boot=500)
+descdist(df$Tu[-which(is.na(df$Tu/df$Total))], discrete = FALSE, boot=500)
+
+```
+
+Clearly not a normal distribution so we will use the binomial family in glmer to analyse data
+
+## Statistical analyses
+
+# 2 - Does the timing and initial density change the probability of coexistence?
+
+## 2.1 - Whole data set
+
+## Figure 1
+```{r}
+df_box$Density2<-factor(df_box$Density, levels=c("1:19","10:10","19:1"))
+
+
+
+  ggplot(subset(df_box, Treatment!="20Te" & Treatment!="20Tu"), aes(x=Density2, y=proportionTe, fill=interaction(Density2,Timing)))+
+    facet_wrap("Timing", ncol=3, scales = "free_x")+
+    geom_hline(yintercept = 0.5)+
+    geom_boxplot()+
+    theme_ines+
+    scale_fill_manual(values = c("#e0f3f8", "#91bfdb", "#4575b4","#d73027", "#fc8d59", "#fee090", "#ffffbf"), name="Treatment", guide="none", drop=TRUE)+
+    ylab(c("Proportion of T. evansi"))+
+    xlab(c("Initial T. evansi: T. urticae density"))+
+    #scale_x_discrete(labels=c())+
+    theme(legend.title = element_text(size=18, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75))+
+    stat_summary(fun.y=median, geom="smooth", aes(group=Timing, colour=Timing), lwd=1)+
+    scale_colour_manual(values = c( "#4575b4","#d73027", "#fee090"), name="Treatment", guide="none")
+  
+save_plot("./Plots/Figure1.pdf", width=15, height=10)
+```
+
+## Stats
+##### Random part of the model
+First we need to remove the single species regimes, to test for the effects
+Since here we only have as random variable Block, our model will include block as random factor
+Our unit of analysis will be the box
+
+```{r}
+
+df$Block2<-as.factor(df$Block)
+df$Box2<-as.factor(df$Box)
+str(df)
+
+df_wsingle<-subset(df, Treatment!="20Te" & Treatment!="20Tu")
+df_wsingle<-droplevels(df_wsingle)
+str(df_wsingle)
+
+levels(as.factor(df_wsingle$Treatment))
+
+r1<-glmer(cbind(Te,Total)~1+ (1|Block2), data=df_wsingle, family = binomial(link="logit"))
+
+summary(r1)
+```
+
+##### Complete model with Block as random factor
+```{r}
+
+b1<-glmer(cbind(Te,Total)~ Density*Timing+(1|Block2), data=df_wsingle, family = binomial(link="logit"))
+b2<-glmer(cbind(Te,Total)~ Density+Timing+(1|Block2), data=df_wsingle, family = binomial(link="logit"))
+b3<-glmer(cbind(Te,Total)~ Timing+(1|Block2), data=df_wsingle, family = binomial(link="logit"))
+b4<-glmer(cbind(Te,Total)~ Density+(1|Block2), data=df_wsingle, family = binomial(link="logit"))
+b5<-glmer(cbind(Te,Total)~ Treatment+(1|Block2), data=df_wsingle, family = binomial(link="logit"))
+
+anova(b1, b2, b3, b4, b5)
+
+```
+The lowest AIC is from models b1 and b5, which correspond to the complete model, so lets take a look at the summary of the model
+
+```{r}
+summary(b1)
+summary(b5)
+Anova(b1, type=3)
+Anova(b5, type=3)
+
+
+```
+
+There is a clear effect of treatment in the proportion of Te females. To test the impact of orde of arrival and initial frequency we can perform contrasts using the phia package.
+
+##### Contrasts
+
+Using a single factor
+```{r}
+b5_2<-glmer(cbind(Te,Total)~ Treatment+(1|Block2), data=df_wsingle, family = binomial(link="logit"))
+
+summary(b5_2)
+levels(as.factor(df_wsingle$Treatment))
+
+test_int2<-testInteractions(b5_2, pairwise="Treatment", adjustment = "fdr")
+test_int2
+
+#Now we just select the ones we want to compare
+#effect of timing
+test_int2[c(1, 2,7,16, 21 ),]
+
+#effect of density
+test_int2[c(3,5,11, 13,17 ),]
+
+# Testing overall order of arrival and overall density
+
+mat_overall<-matrix(ncol=4, nrow=7)
+colnames(mat_overall)<-c("Order of arrival Te first", "Order of arrival Tu first", "Te higher initially", "Tu higher initially")
+rownames(mat_overall)<-c("10Te10Tu","10Te10Tu48h", "10Te48h10Tu", "19Te1Tu", "19Te48h1Tu", "1Te19Tu", "1Te19Tu48h" )
+
+mat_overall[1,1]<- 1
+mat_overall[2,1]<- 0
+mat_overall[3,1]<- -1
+mat_overall[4,1]<- 1
+mat_overall[5,1]<- -1
+mat_overall[6,1]<- 0
+mat_overall[7,1]<- 0
+
+mat_overall[1,2]<- 1
+mat_overall[2,2]<- -1
+mat_overall[3,2]<- 0
+mat_overall[4,2]<- 0
+mat_overall[5,2]<- 0
+mat_overall[6,2]<- 1
+mat_overall[7,2]<- -1
+
+
+mat_overall[1,3]<- 1
+mat_overall[2,3]<- 1
+mat_overall[3,3]<- 1
+mat_overall[4,3]<- -1
+mat_overall[5,3]<- -1
+mat_overall[6,3]<- 0
+mat_overall[7,3]<- 0
+
+mat_overall[1,4]<- 1
+mat_overall[2,4]<- 1
+mat_overall[3,4]<- 1
+mat_overall[4,4]<- 0
+mat_overall[5,4]<- 0
+mat_overall[6,4]<- -1
+mat_overall[7,4]<- -1
+
+mat_overall
+
+test_int3<-testInteractions(b5_2, custom=list(Treatment=mat_overall), adjustment = "fdr")
+test_int3
+```
+
+## 2.2 - Test the importance of order of leaves
+
+To test this we will run the model for the subset of the data with leaves 2 -4 first or 3 - 5 first
+```{r}
+str(df_wsingle)
+
+pair2_4_old<-subset(df_wsingle, (Leaf==2 & leaf_age=="old") | (Leaf==4 & leaf_age=="old") | (Leaf==3 & leaf_age=="new") | (Leaf==5 & leaf_age=="new"))
+
+pair2_4_new<-subset(df_wsingle, (Leaf==3 & leaf_age=="old") | (Leaf==5 & leaf_age=="old") | (Leaf==2 & leaf_age=="new") | (Leaf==4 & leaf_age=="new"))
+
+g24Old<-glmer(cbind(Te,Total)~ Treatment+(1|Block2), data=pair2_4_old, family = binomial(link="logit"))
+summary(g24Old)
+Anova(g24Old, type=3)
+
+g24New<-glmer(cbind(Te,Total)~ Treatment+(1|Block2), data=pair2_4_new, family = binomial(link="logit"))
+summary(g24New)
+Anova(g24New, type=3)
+
+test_intOld<-testInteractions(g24Old, pairwise="Treatment", adjustment = "fdr")
+test_intOld
+
+test_intNew<-testInteractions(g24New, pairwise="Treatment", adjustment = "fdr")
+test_intNew
+
+#Now we just select the ones we want to compare
+#effect of timing
+test_intOld[c(1, 2,16, 21, 7 ),]
+test_intNew[c(1, 2,16, 21, 7 ),]
+
+#effect of density
+test_intOld[c(3,5,11, 13,17 ),]
+test_intNew[c(3,5,11, 13,17 ),]
+
+test_intOld2<-testInteractions(g24Old, custom=list(Treatment=mat_overall), adjustment = "fdr")
+test_intNew2<-testInteractions(g24New, custom=list(Treatment=mat_overall), adjustment = "fdr")
+
+test_intOld2
+test_intNew2
+
+```
+
+We have the same results as before! Which indicates that adding the different pairs of leaves first does not affect the impact of order of arrival or initial frequency.
+
+# 3 - Impact of spatial variation
+
+# 3.1 - Is spatial variation mediating coexistence
+
+## Analysing differences to the occupancy of single treatments
+
+These analyses do not take into account leaf age!
+
+Here we will calculate the percentage of individuals from each box that are in each leaf for the single regime.
+Then we will don the same for the treatments and will then compare the difference
+
+### Fig 3, S3
+```{r}
+# Start with calculating total number of individuals per leaf
+single_df<-subset(df, Treatment=="20Te" | Treatment=="20Tu")
+str(single_df)
+
+total_box_single_leaf<-single_df %>%
+  group_by(Treatment, Box, Leaf, Block) %>%
+  summarize(sumTe=sum(Te, na.rm=TRUE),sumTu=sum(Tu, na.rm=TRUE))%>%
+  as.data.frame()
+
+# Same for the treatments
+total_box_treat_leaf<-df %>%
+  group_by(Treatment, Box, Leaf, Block) %>%
+  summarize(sumTe=sum(Te, na.rm=TRUE),sumTu=sum(Tu, na.rm=TRUE))%>%
+  as.data.frame()
+
+
+## Calculating percentage
+
+#For single
+total_box_single_leaf$PercentTe<-sapply(c(1:length(total_box_single_leaf[,1])), function(x){
+  
+  aux<-subset(total_box_single_leaf, Treatment==total_box_single_leaf$Treatment[x] & Box==total_box_single_leaf$Box[x])
+  
+  aux_sum<-sum(aux$sumTe[1:4], na.rm=TRUE)
+  
+  a<-total_box_single_leaf$sumTe[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+total_box_single_leaf$PercentTu<-sapply(c(1:length(total_box_single_leaf[,1])), function(x){
+  
+  aux<-subset(total_box_single_leaf, Treatment==total_box_single_leaf$Treatment[x] & Box==total_box_single_leaf$Box[x])
+  
+  aux_sum<-sum(aux$sumTu[1:4], na.rm=TRUE)
+  
+  a<-total_box_single_leaf$sumTu[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+# For treatments
+total_box_treat_leaf$PercentTe<-sapply(c(1:length(total_box_treat_leaf[,1])), function(x){
+  
+  aux<-subset(total_box_treat_leaf, Treatment==total_box_treat_leaf$Treatment[x] & Box==total_box_treat_leaf$Box[x])
+  
+  aux_sum<-sum(aux$sumTe[1:4], na.rm=TRUE)
+  
+  a<-total_box_treat_leaf$sumTe[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+total_box_treat_leaf$PercentTu<-sapply(c(1:length(total_box_treat_leaf[,1])), function(x){
+  
+  aux<-subset(total_box_treat_leaf, Treatment==total_box_treat_leaf$Treatment[x] & Box==total_box_treat_leaf$Box[x])
+  
+  aux_sum<-sum(aux$sumTu[1:4], na.rm=TRUE)
+  
+  a<-total_box_treat_leaf$sumTu[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+total_box_treat_leaf
+
+
+### Now calculating the difference to the average percentage of the single regime
+
+# first creating average data base for the single regimes
+
+mean_percentage_single<-total_box_single_leaf %>%
+  group_by(Treatment, Leaf)%>%
+  summarize(meanTe=mean(PercentTe), meanTu=mean(PercentTu))%>%
+  as.data.frame()
+
+mean_percentage_single
+
+
+#Now adding to thr percent data frame
+aux_diffTe<-t(sapply(c(1:length(total_box_treat_leaf[,1])), function(x){
+  aux<-subset(mean_percentage_single, Leaf==total_box_treat_leaf$Leaf[x])
+  
+  te<-total_box_treat_leaf$PercentTe[x]-aux$meanTe[1]
+  tu<-total_box_treat_leaf$PercentTu[x]-aux$meanTu[2] #because the first is always NA
+  
+  c(te, tu)
+}))
+
+colnames(aux_diffTe)<-c("diffTe", "diffTu")
+
+
+total_box_treat_leaf<-as.data.frame(cbind(total_box_treat_leaf[,c(1:8)], aux_diffTe))
+str(total_box_treat_leaf)
+
+
+total_box_treat_leaf$Treatment2<-factor(total_box_treat_leaf$Treatment, levels=c("1Te19Tu", "10Te10Tu","19Te1Tu", "1Te19Tu48h","10Te10Tu48h","10Te48h10Tu","19Te48h1Tu"))
+
+total_box_treat_leaf$Treatment3<-mapvalues(total_box_treat_leaf$Treatment,c("1Te19Tu", "10Te10Tu","19Te1Tu", "1Te19Tu48h","10Te10Tu48h","10Te48h10Tu","19Te48h1Tu"), c("1:19\nsame time", "10:10\nsame time", "19:1\nsame time", "1:19\nTu first", "10:10\nTu first","10:10\nTe first", "19:1\nTe first") )
+
+total_box_treat_leaf$Treatment4<-factor(total_box_treat_leaf$Treatment3, levels=c("1:19\nsame time", "10:10\nsame time", "19:1\nsame time", "1:19\nTu first", "10:10\nTu first","10:10\nTe first", "19:1\nTe first") )
+
+
+plot_percent_Te<-ggplot(subset(total_box_treat_leaf,Treatment!="20Te" &  Treatment!="20Tu"), aes(x=as.factor(Leaf), y=diffTe, fill=Treatment4))+
+  facet_grid(.~Treatment4)+
+  geom_hline(yintercept = 0)+
+  geom_boxplot()+
+  theme_ines+
+  scale_fill_manual(values = c("#e0f3f8", "#91bfdb", "#4575b4",  "#fee090", "#ffffbf","#d73027", "#fc8d59"), name="Treatment")+
+  ylab(c("Percentage of T. evansi per leaf\nrelative to single control"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discrete(labels=c())+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+plot_percent_Te
+save_plot("./Plots/Percent_Single_Te.pdf", width=25, height=15)
+
+plot_percent_Tu<-ggplot(subset(total_box_treat_leaf,Treatment!="20Te" &  Treatment!="20Tu"), aes(x=as.factor(Leaf), y=diffTu, fill=Treatment4))+
+  facet_grid(.~Treatment4)+
+  geom_hline(yintercept = 0)+
+  geom_boxplot()+
+  theme_ines+
+  scale_fill_manual(values = c("#e0f3f8", "#91bfdb", "#4575b4",  "#fee090", "#ffffbf","#d73027", "#fc8d59"), name="Treatment")+
+  ylab(c("Density of T. urticae per leaf\nrelative to single control"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discrete(labels=c())+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+plot_percent_Tu
+save_plot("./Plots/Percent_Single_Tu.pdf", width=25, height=15)
+
+
+
+### For single
+
+te_single_perc<-ggplot(subset(total_box_treat_leaf, Treatment=="20Te"), aes(x=as.factor(Leaf), y=PercentTe))+
+  geom_boxplot(fill="#d73027")+
+  theme_ines+
+  ylab(c("Number Te females"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discrete(labels=c())+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+te_single_perc
+save_plot("./Plots/Te_single_dist_perc.pdf", width=7.5, height=7.5)
+
+
+tu_single_perc<-ggplot(subset(total_box_treat_leaf, Treatment=="20Tu"), aes(x=as.factor(Leaf), y=PercentTu))+
+  geom_boxplot(fill="#fee090")+
+  theme_ines+
+  ylab(c("Number Tu females"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discrete(labels=c())+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+tu_single_perc
+save_plot("./Plots/Tu_single_dist_perc.pdf", width=7.5, height=7.5)
+
+```
+Te prefers leaves 3 and 4 when alone and Tu does not show a strong preference for any leaf. When Tu arrives first, there is a decrease in Te occupancy for leaves 3 and 4, with a corresponding Tu occupancy of these leaves.
+
+### Stats percentage
+
+```{r}
+
+total_box_treat_leaf$TreatmentTe<-factor(as.factor(total_box_treat_leaf$Treatment), levels=c("20Te","10Te10Tu", "10Te10Tu48h","10Te48h10Tu","19Te1Tu" ,"19Te48h1Tu", "1Te19Tu", "1Te19Tu48h","20Tu" ))
+total_box_treat_leaf$TreatmentTu<-factor(as.factor(total_box_treat_leaf$Treatment), levels=c("20Tu","10Te10Tu", "10Te10Tu48h","10Te48h10Tu","19Te1Tu" ,"19Te48h1Tu", "1Te19Tu", "1Te19Tu48h","20Te" ))
+
+total_box_treat_leaf$Block<-as.factor(total_box_treat_leaf$Block)
+total_box_treat_leaf$Leaf2<-as.factor(total_box_treat_leaf$Leaf)
+
+str(total_box_treat_leaf)
+
+# adding the total mites
+Total_mites<-t(sapply(c(1:length(total_box_treat_leaf[,1])), function(x){
+  aux<-subset(total_box_treat_leaf, Treatment==total_box_treat_leaf$Treatment[x] & Box==total_box_treat_leaf$Box[x])
+  
+  te<-sum(aux$sumTe, na.rm = TRUE)
+  tu<-sum(aux$sumTu, na.rm = TRUE)
+  
+  c(te, tu)
+}))
+
+colnames(Total_mites)<-c("TotalTe", "TotalTu")
+
+total_box_treat_leaf<-as.data.frame(cbind(total_box_treat_leaf[, c(1:16)], Total_mites))
+
+
+forTe<-subset(total_box_treat_leaf, Treatment!="20Tu")
+forTe<-droplevels(forTe)
+
+forTu<-subset(total_box_treat_leaf, Treatment!="20Te")
+forTu<-droplevels(forTu)
+
+str(forTe)
+
+## using cbind
+
+# when performing the glmer the block shows variance 0, so I will run the model without the random effect
+perc_te<-glm(cbind(sumTe, TotalTe)~TreatmentTe*Leaf2, data=forTe, family=binomial) 
+summary(perc_te)
+
+perc_tu<-glm(cbind(sumTu, TotalTu)~TreatmentTu*Leaf2, data=forTu, family=binomial) 
+
+summary(perc_te)
+Anova(perc_te)
+
+summary(perc_tu)
+Anova(perc_tu)
+
+
+testInteractions(perc_te, fixed = c("Leaf2"), pairwise = c("TreatmentTe"),adjustment = "fdr")
+testInteractions(perc_tu, fixed = c("Leaf2"), pairwise = c("TreatmentTu"),adjustment = "fdr")
+
+```
+
+### Fig S4
+
+```{r}
+total_box_single_24old<-subset(single_df, (Leaf==2 & leaf_age=="old") | (Leaf==4 & leaf_age=="old") | (Leaf==3 & leaf_age=="new") | (Leaf==5 & leaf_age=="new")) %>%
+  group_by(Treatment, Box, Leaf, Block) %>%
+  summarize(sumTe=sum(Te, na.rm=TRUE),sumTu=sum(Tu, na.rm=TRUE))%>%
+  as.data.frame()
+
+total_box_single_24new<-subset(single_df, (Leaf==3 & leaf_age=="old") | (Leaf==5 & leaf_age=="old") | (Leaf==2 & leaf_age=="new") | (Leaf==4 & leaf_age=="new")) %>%
+  group_by(Treatment, Box, Leaf, Block) %>%
+  summarize(sumTe=sum(Te, na.rm=TRUE),sumTu=sum(Tu, na.rm=TRUE))%>%
+  as.data.frame()
+
+# Same for the treatments
+total_box_treat_24old<-subset(df_wsingle, (Leaf==2 & leaf_age=="old") | (Leaf==4 & leaf_age=="old") | (Leaf==3 & leaf_age=="new") | (Leaf==5 & leaf_age=="new")) %>%
+  group_by(Treatment, Box, Leaf, Block) %>%
+  summarize(sumTe=sum(Te, na.rm=TRUE),sumTu=sum(Tu, na.rm=TRUE))%>%
+  as.data.frame()
+
+total_box_treat_24new<-subset(df_wsingle, (Leaf==3 & leaf_age=="old") | (Leaf==5 & leaf_age=="old") | (Leaf==2 & leaf_age=="new") | (Leaf==4 & leaf_age=="new")) %>%
+  group_by(Treatment, Box, Leaf, Block) %>%
+  summarize(sumTe=sum(Te, na.rm=TRUE),sumTu=sum(Tu, na.rm=TRUE))%>%
+  as.data.frame()
+
+
+## Calculating percentage
+
+#For single
+total_box_single_24old$PercentTe<-sapply(c(1:length(total_box_single_24old[,1])), function(x){
+  
+  aux<-subset(total_box_single_24old, Treatment==total_box_single_24old$Treatment[x] & Box==total_box_single_24old$Box[x])
+  
+  aux_sum<-sum(aux$sumTe[1:4], na.rm=TRUE)
+  
+  a<-total_box_single_24old$sumTe[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+total_box_single_24old$PercentTu<-sapply(c(1:length(total_box_single_24old[,1])), function(x){
+  
+  aux<-subset(total_box_single_24old, Treatment==total_box_single_24old$Treatment[x] & Box==total_box_single_24old$Box[x])
+  
+  aux_sum<-sum(aux$sumTu[1:4], na.rm=TRUE)
+  
+  a<-total_box_single_24old$sumTu[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+
+total_box_single_24new$PercentTe<-sapply(c(1:length(total_box_single_24new[,1])), function(x){
+  
+  aux<-subset(total_box_single_24new, Treatment==total_box_single_24new$Treatment[x] & Box==total_box_single_24new$Box[x])
+  
+  aux_sum<-sum(aux$sumTe[1:4], na.rm=TRUE)
+  
+  a<-total_box_single_24new$sumTe[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+total_box_single_24new$PercentTu<-sapply(c(1:length(total_box_single_24new[,1])), function(x){
+  
+  aux<-subset(total_box_single_24new, Treatment==total_box_single_24new$Treatment[x] & Box==total_box_single_24new$Box[x])
+  
+  aux_sum<-sum(aux$sumTu[1:4], na.rm=TRUE)
+  
+  a<-total_box_single_24new$sumTu[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+# For treatments
+total_box_treat_24old$PercentTe<-sapply(c(1:length(total_box_treat_24old[,1])), function(x){
+  
+  aux<-subset(total_box_treat_24old, Treatment==total_box_treat_24old$Treatment[x] & Box==total_box_treat_24old$Box[x])
+  
+  aux_sum<-sum(aux$sumTe[1:4], na.rm=TRUE)
+  
+  a<-total_box_treat_24old$sumTe[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+total_box_treat_24old$PercentTu<-sapply(c(1:length(total_box_treat_24old[,1])), function(x){
+  
+  aux<-subset(total_box_treat_24old, Treatment==total_box_treat_24old$Treatment[x] & Box==total_box_treat_24old$Box[x])
+  
+  aux_sum<-sum(aux$sumTu[1:4], na.rm=TRUE)
+  
+  a<-total_box_treat_24old$sumTu[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+total_box_treat_24new$PercentTe<-sapply(c(1:length(total_box_treat_24new[,1])), function(x){
+  
+  aux<-subset(total_box_treat_24new, Treatment==total_box_treat_24new$Treatment[x] & Box==total_box_treat_24new$Box[x])
+  
+  aux_sum<-sum(aux$sumTe[1:4], na.rm=TRUE)
+  
+  a<-total_box_treat_24new$sumTe[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+total_box_treat_24new$PercentTu<-sapply(c(1:length(total_box_treat_24new[,1])), function(x){
+  
+  aux<-subset(total_box_treat_24new, Treatment==total_box_treat_24new$Treatment[x] & Box==total_box_treat_24new$Box[x])
+  
+  aux_sum<-sum(aux$sumTu[1:4], na.rm=TRUE)
+  
+  a<-total_box_treat_24new$sumTu[x]/aux_sum
+  
+  if(a=="NaN"){
+    a<-NA
+  }
+  
+  a
+})
+
+
+### Now calculating the difference to the average percentage of the single regime
+
+# first creating average data base for the single regimes
+
+mean_percentage_single_24old<-total_box_single_24old %>%
+  group_by(Treatment, Leaf)%>%
+  summarize(meanTe=mean(PercentTe), meanTu=mean(PercentTu))%>%
+  as.data.frame()
+
+
+mean_percentage_single_24new<-total_box_single_24new %>%
+  group_by(Treatment, Leaf)%>%
+  summarize(meanTe=mean(PercentTe), meanTu=mean(PercentTu))%>%
+  as.data.frame()
+
+
+#Now adding to the percent data frame
+aux_diffTe_24old<-t(sapply(c(1:length(total_box_treat_24old[,1])), function(x){
+  aux<-subset(mean_percentage_single_24old, Leaf==total_box_treat_24old$Leaf[x])
+  
+  te<-total_box_treat_24old$PercentTe[x]-aux$meanTe[1]
+  tu<-total_box_treat_24old$PercentTu[x]-aux$meanTu[2] #because the first is always NA
+  
+  c(te, tu)
+}))
+
+aux_diffTe_24new<-t(sapply(c(1:length(total_box_treat_24new[,1])), function(x){
+  aux<-subset(mean_percentage_single_24new, Leaf==total_box_treat_24new$Leaf[x])
+  
+  te<-total_box_treat_24new$PercentTe[x]-aux$meanTe[1]
+  tu<-total_box_treat_24new$PercentTu[x]-aux$meanTu[2] #because the first is always NA
+  
+  c(te, tu)
+}))
+colnames(aux_diffTe_24old)<-c("diffTe", "diffTu")
+
+colnames(aux_diffTe_24new)<-c("diffTe", "diffTu")
+
+
+total_box_treat_24old<-as.data.frame(cbind(total_box_treat_24old[,c(1:8)], aux_diffTe_24old))
+str(total_box_treat_24old)
+
+total_box_treat_24new<-as.data.frame(cbind(total_box_treat_24new[,c(1:8)], aux_diffTe_24new))
+str(total_box_treat_24new)
+
+
+total_box_treat_24old$Treatment2<-factor(total_box_treat_24old$Treatment, levels=c("1Te19Tu", "10Te10Tu","19Te1Tu", "1Te19Tu48h","10Te10Tu48h","10Te48h10Tu","19Te48h1Tu"))
+
+total_box_treat_24old$Treatment3<-mapvalues(total_box_treat_24old$Treatment,c("1Te19Tu", "10Te10Tu","19Te1Tu", "1Te19Tu48h","10Te10Tu48h","10Te48h10Tu","19Te48h1Tu"), c("1:19\nsame time", "10:10\nsame time", "19:1\nsame time", "1:19\nTu first", "10:10\nTu first","10:10\nTe first", "19:1\nTe first") )
+
+total_box_treat_24old$Treatment4<-factor(total_box_treat_24old$Treatment3, levels=c("1:19\nsame time", "10:10\nsame time", "19:1\nsame time", "1:19\nTu first", "10:10\nTu first","10:10\nTe first", "19:1\nTe first") )
+
+total_box_treat_24new$Treatment2<-factor(total_box_treat_24new$Treatment, levels=c("1Te19Tu", "10Te10Tu","19Te1Tu", "1Te19Tu48h","10Te10Tu48h","10Te48h10Tu","19Te48h1Tu"))
+
+total_box_treat_24new$Treatment3<-mapvalues(total_box_treat_24new$Treatment,c("1Te19Tu", "10Te10Tu","19Te1Tu", "1Te19Tu48h","10Te10Tu48h","10Te48h10Tu","19Te48h1Tu"), c("1:19\nsame time", "10:10\nsame time", "19:1\nsame time", "1:19\nTu first", "10:10\nTu first","10:10\nTe first", "19:1\nTe first") )
+
+total_box_treat_24new$Treatment4<-factor(total_box_treat_24new$Treatment3, levels=c("1:19\nsame time", "10:10\nsame time", "19:1\nsame time", "1:19\nTu first", "10:10\nTu first","10:10\nTe first", "19:1\nTe first") )
+
+### For single
+
+te_single_24old<-ggplot(subset(total_box_single_24old, Treatment=="20Te"), aes(x=as.factor(Leaf), y=PercentTe))+
+  geom_boxplot(fill="#d73027")+
+  theme_ines+
+  ylab(c("Number Te females"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discrete(labels=c())+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+te_single_24old
+save_plot("./Plots/Te_single_dist_24old.pdf", width=7.5, height=7.5)
+
+te_single_24new<-ggplot(subset(total_box_single_24new, Treatment=="20Te"), aes(x=as.factor(Leaf), y=PercentTe))+
+  geom_boxplot(fill="#d73027")+
+  theme_ines+
+  ylab(c("Number Te females"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discrete(labels=c())+
+  theme(legend.title = element_text(size=16, face="bnew"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+te_single_24new
+save_plot("./Plots/Te_single_dist_24new.pdf", width=7.5, height=7.5)
+
+
+tu_single_24old<-ggplot(subset(total_box_single_24old, Treatment=="20Tu"), aes(x=as.factor(Leaf), y=PercentTu))+
+  geom_boxplot(fill="#fee090")+
+  theme_ines+
+  ylab(c("Number Tu females"))+
+  xlab(c("Leaf Position"))+
+  ylim(c(0,1))+
+  #scale_x_discrete(labels=c())+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+tu_single_24old
+save_plot("./Plots/Tu_single_dist_24old.pdf", width=7.5, height=7.5)
+
+tu_single_24new<-ggplot(subset(total_box_single_24new, Treatment=="20Tu"), aes(x=as.factor(Leaf), y=PercentTu))+
+  geom_boxplot(fill="#fee090")+
+  theme_ines+
+  ylab(c("Number Tu females"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discrete(labels=c())+
+  ylim(c(0,1))+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+tu_single_24new
+save_plot("./Plots/Tu_single_dist_24new.pdf", width=7.5, height=7.5)
+
+
+
+#### Single graph with both old and new BUT WITH THE DIFFERENCES TO THE RESPECTIVE CONTROLS
+
+new_total_box<-as.data.frame(rbind(total_box_treat_24new, total_box_treat_24new))
+
+
+one_diffplot_Te<-ggplot(subset(new_total_box,Treatment!="20Te" &  Treatment!="20Tu"), aes(x=as.factor(Leaf), y=diffTe, fill=Treatment4))+
+  facet_grid(.~Treatment4)+
+  geom_hline(yintercept = 0)+
+  geom_boxplot()+
+  theme_ines+
+  scale_fill_manual(values = c("#e0f3f8", "#91bfdb", "#4575b4",  "#fee090", "#ffffbf","#d73027", "#fc8d59"), name="Treatment")+
+  ylab(c("Percentage of T. evansi per leaf\nrelative to single control"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discrete(labels=c())+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+one_diffplot_Te
+save_plot("./Plots/one_diffplot_Te.pdf", width=25, height=15)
+
+one_diffplot_Tu<-ggplot(subset(new_total_box,Treatment!="20Tu" &  Treatment!="20Tu"), aes(x=as.factor(Leaf), y=diffTu, fill=Treatment4))+
+  facet_grid(.~Treatment4)+
+  geom_hline(yintercept = 0)+
+  geom_boxplot()+
+  theme_ines+
+  scale_fill_manual(values = c("#e0f3f8", "#91bfdb", "#4575b4",  "#fee090", "#ffffbf","#d73027", "#fc8d59"), name="Treatment")+
+  ylab(c("Percentage of T. urticae per leaf\nrelative to single control"))+
+  xlab(c("Leaf Position"))+
+  #scale_x_discreTu(labels=c())+
+  theme(legend.title = element_text(size=16, face="bold"), axis.text.x = element_text(angle=20, vjust = 0.75), legend.position = "bottom")
+one_diffplot_Tu
+save_plot("./Plots/one_diffplot_Tu.pdf", width=25, height=15)
+
+
+```
+
+### Statistics (accounting for leaf order)
+
+Distribution
+```{r}
+hist(new_total_box$diffTe)
+hist(new_total_box$diffTu)
+
+descdist(new_total_box$diffTe, discrete = FALSE, boot=500)
+descdist(new_total_box$diffTu, discrete = FALSE, boot=500)
+
+#Log normal fits both
+
+```
+
+Statistics
+```{r}
+str(new_total_box)
+
+# Making leaf and Block as factors
+new_total_box$Leaf2<-as.factor(new_total_box$Leaf)
+new_total_box$Block2<-as.factor(new_total_box$Block)
+
+mla_Te<-lmer(log(diffTe+1)~Treatment2*Leaf2+ (1|Block2), data=new_total_box)
+mla_Tu<-lmer(log(diffTu+1)~Treatment2*Leaf2+ (1|Block2), data=new_total_box)
+
+summary(mla_Te)
+summary(mla_Tu)
+
+Anova(mla_Te)
+Anova(mla_Tu)
+
+
+#### Contrasts
+levels(as.factor(new_total_box$Treatment))
+
+mat_Leaf2<-matrix(ncol=10, nrow=7, 0)
+
+#Compare Tu arriving first 10:10
+mat_Leaf2[1,1]<-1
+mat_Leaf2[2,1]<- -1
+
+
+#Compare Te arriving first 10:10
+mat_Leaf2[1,2]<-1
+mat_Leaf2[3,2]<- -1
+
+#Compare Te arriving first 19:1
+mat_Leaf2[4,3]<-1
+mat_Leaf2[5,3]<- -1
+
+#Compare Tu arriving first 1:19
+mat_Leaf2[6,4]<-1
+mat_Leaf2[7,4]<- -1
+
+#Compare Same arrival density effect Te
+mat_Leaf2[1,5]<-1
+mat_Leaf2[4,5]<- -1
+
+#Compare Same arrival density effect Tu
+mat_Leaf2[1,6]<-1
+mat_Leaf2[6,6]<- -1
+
+#Compare Tu arriving first (both densities)
+mat_Leaf2[1,7]<-1
+mat_Leaf2[2,7]<- -1
+mat_Leaf2[6,7]<-1
+mat_Leaf2[7,7]<- -1
+
+#Compare Te arriving first (both densities)
+mat_Leaf2[4,8]<-1
+mat_Leaf2[5,8]<- -1
+mat_Leaf2[1,8]<-1
+mat_Leaf2[3,8]<- -1
+
+
+#Compare 1:19Tu  (both timepoints)
+mat_Leaf2[1,9]<-1
+mat_Leaf2[2,9]<- 1
+mat_Leaf2[6,9]<- -1
+mat_Leaf2[7,9]<- -1
+
+#Compare 19Te:1 (both timepoints)
+mat_Leaf2[1,10]<-1
+mat_Leaf2[3,10]<- 1
+mat_Leaf2[4,10]<- -1
+mat_Leaf2[5,10]<- -1
+
+rownames(mat_Leaf2)<-c(levels(as.factor(df_wsingle$Treatment)))
+colnames(mat_Leaf2)<-c("Tufirst_10:10", "Tefirst_10:10", "Tefirst_19:1", "Tufirst_1:19", "DensityTe19", "DensityTu19", "Tu arriving first", "Te arriving first", "Tu density", "Te density")
+mat_Leaf2
+
+test_la_Te<-testInteractions(mla_Te, fixed=c("Leaf2"), custom = list(Treatment2=mat_Leaf2), adjustment = "fdr" )
+
+test_la_Tu<-testInteractions(mla_Tu, fixed=c("Leaf2"), custom = list(Treatment2=mat_Leaf2), adjustment = "fdr" )
+
+test_la_Te
+test_la_Tu
+
+```
+
+
+# Calculating agreggation scores to test if changes between leaf, leaf age and direction
+We will use C-score (package bipartite, which normalises c_score between 0 and 1) to test for aggregation between the two species for the different treatments
+
+## C score
+
+For the C score we need a presence absence matrix per leaflet inside of a leaf 
+```{r}
+str(df)
+
+df$Leaf_leaflet<-sapply(c(1:length(df[,1])), function(x){paste(df$Leaf[x],df$Leaflet[x], sep="_")})
+df$Leaf_leaflet_dir<-sapply(c(1:length(df[,1])), function(x){paste(df$Leaf[x],df$Leaflet[x], df$Direction[x], sep="_")})
+
+### Summing everything per leaflet
+
+aux_df2<-df %>%
+  group_by(Treatment, Density, Timing , Block, Box, Leaf, Leaflet) %>%
+     summarise(Te=sum(Te, na.rm=TRUE), Tu=sum(Tu, na.rm=TRUE)) %>%
+  as.data.frame()
+
+aux_df2$Leaf_leaflet<-sapply(c(1:length(aux_df2[,1])), function(x){paste(aux_df2$Leaf[x],aux_df2$Leaflet[x], sep="_")})
+
+aux_df2$Tu[which(aux_df2$Tu >1)]<-1
+aux_df2$Te[which(aux_df2$Te >1)]<-1
+str(aux_df2)
+
+tu_df2<-pivot_wider(aux_df2[,c(1, 5,  9,10)], names_from=Leaf_leaflet, values_from=Tu)
+te_df2<-pivot_wider(aux_df2[,c(1, 5, 8,10)], names_from=Leaf_leaflet, values_from=Te)
+
+tu_df2$species<-"Tu"
+te_df2$species<-"Te"
+
+mat_02<-as.data.frame(rbind(tu_df2, te_df2))
+
+mat_02
+
+mat_02[is.na(mat_02)]<-0
+
+c_score_mat<-expand.grid(Box=c(1:10), Treatment=levels(as.factor(df$Treatment)))
+c_score_mat$cscore<-NA
+
+str(mat_02)
+
+c_score_mat$cscore<-sapply(c(1:length(c_score_mat$Box)), function(x){
+  C.score(t(subset(mat_02, Box==c_score_mat$Box[x] & as.character(Treatment)==as.character(c_score_mat$Treatment[x]))[,c(3:20)]), normalise = TRUE)
+})
+
+
+c_score_mat$Treatment2<-factor(c_score_mat$Treatment, levels=c("1Te19Tu", "10Te10Tu","19Te1Tu", "1Te19Tu48h","10Te10Tu48h","10Te48h10Tu","19Te48h1Tu"))
+
+c_score_mat$Treatment3<-mapvalues(c_score_mat$Treatment2,c("1Te19Tu", "10Te10Tu","19Te1Tu", "1Te19Tu48h","10Te10Tu48h","10Te48h10Tu","19Te48h1Tu"), c("1:19\nsame time", "10:10\nsame time", "19:1\nsame time", "1:19\nTu first", "10:10\nTu first","10:10\nTe first", "19:1\nTe first") )
+
+c_score_mat<-c_score_mat[-which(is.na(c_score_mat)),]
+
+c_score_mat<-c_score_mat[-which(c_score_mat$cscore=="NaN"),]
+
+
+c_score_mat<-droplevels(c_score_mat)
+```
+
+### Figure S5
+```{r}
+
+ggplot(c_score_mat, aes(x=Treatment3, y=cscore, fill=Treatment3))+
+  geom_boxplot(na.rm=TRUE)+
+  theme_ines+
+  scale_fill_manual(values = c("#e0f3f8", "#91bfdb", "#4575b4",  "#fee090", "#ffffbf","#d73027", "#fc8d59"), name="Treatment")+
+  scale_x_discrete(labels=c("","","","","","",""))+
+  ylab("C-Score")+
+  xlab("Treatment")+
+  theme(axis.text.x = element_text(angle=60, vjust = 0.5))
+
+save_plot("./Plots/C_score.pdf")
+
+```
+
+### Test if C scores differ between treatments
+
+```{r}
+
+shapiro.test(c_score_mat$cscore)
+hist(c_score_mat$cscore)
+
+descdist(c_score_mat$cscore+1, discrete = FALSE, boot=500)
+
+plot(fitdist(c_score_mat$cscore+1, "gamma"))
+plot(fitdist(c_score_mat$cscore, "beta", "mme"))
+plot(fitdist(c_score_mat$cscore+1, "lnorm"))
+
+fit_dist_cscore<-summary(fitdist(c_score_mat$cscore, "beta", "mme"))
+str(fit_dist_cscore)
+
+c_score_mat$Block<-mapvalues(c_score_mat$Box, c(1,2,3,4,5,6,7,8,9,10), c(1,1,1,1,1,2,2,2,2,2))
+c_score_mat$Block<-as.factor(c_score_mat$Block)
+
+cs2<-glm((cscore+1)~Treatment, family=Gamma, data=c_score_mat)
+
+summary(cs2)
+Anova(cs2, type=2)
+testInteractions(cs2, pairwise="Treatment", adjustment = "fdr")
+
+
+
+```
+
+# Order of arrival affects probability of coexistence?
+
+### Calculating FD from Godoy and Levine 2014
+The demographic parameter in our case is lambdai -1 / lambdaj -1 and the competitive response the alphas which are arranged in a different way to calculate niche diff.
+
+ aij describes the per capita effect of species j on species i --> so in the script, in the results the row is the focal so the Te inter is the effect that Tu has on Te, and Tu inter vice versa.
+
+fitness ratio = ((nj-1)/(ni-1))* sqrt(aij/ajj * aii/aji)
+Niche overlap = sqrt(aij/ajj* aji/aii)
+
+Don't forget that niche differences is 1- niche overlap
+
+The data is generated by the script alpha_estimate_fixed_final.Rmd, so please run this script before hand
+
+```{r}
+df_alpha_lambda<-read.csv("./Estimate_Lambda_fixed_allTreats/Results_all.csv", header=TRUE)
+
+ggplot(df_alpha_lambda, aes(x=Comp, y=Alpha, colour=Arrival, fill=Arrival))+
+  facet_grid(.~Species)+
+  geom_errorbar(aes(ymin=Alpha_Lower, ymax=Alpha_Upper), position=position_dodge(0.5), size=0.75)+
+  geom_point(size=2, position=position_dodge(0.5), shape=21, colour="black")+
+  geom_line(aes(group=Arrival), position=position_dodge2(0.5))+
+  scale_colour_manual(values = c("#4575b4","#d73027", "#fee090"))+
+  scale_fill_manual(values =c("#4575b4","#d73027", "#fee090"))+
+  theme_ines+
+  ylab("Competitive ability")+
+  xlab("")+
+  theme(legend.position = "bottom")
+save_plot("./Estimate_Lambda_fixed_allTreats/alpha.pdf")
+
+ggplot(df_alpha_lambda, aes(x=Species, y=Lambda, colour=Arrival, fill=Arrival))+
+   geom_hline(yintercept =2, colour="lightgray")+
+  geom_hline(yintercept =3.5, colour="lightgray")+
+  geom_errorbar(aes(ymin=Lambda_Lower, ymax=Lambda_Upper), position=position_dodge(0.5), size=0.75)+
+  geom_point(size=2, position=position_dodge(0.5), shape=21, colour="black")+
+  scale_colour_manual(values = c("#4575b4","#d73027", "#fee090"))+
+  scale_fill_manual(values = c("#4575b4","#d73027", "#fee090"))+
+  theme_ines+
+  ylab("Lambda Growth Rate")+
+  xlab("")+
+  theme(legend.position = "bottom")
+save_plot("./Estimate_Lambda_fixed_allTreats/lambda.pdf")
+
+
+coex_df2<-as.data.frame(matrix(nrow=3, ncol=7))
+colnames(coex_df2)<-c("Treatment", "NO", "NO_L", "NO_U", "FD", "FD_L","FD_U")
+
+coex_df2$Treatment<-c("same time","Te first","Tu first")
+str(coex_df2)
+str(df_alpha_lambda)
+head(df_alpha_lambda)
+
+### Important!
+#The order here is Te inter (aji), Tu inter (aij), Te intra (ajj), Tu intra (aii) for each treatment
+
+coex_df2$NO<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  nd<-(sqrt(aux$Alpha[2]/aux$Alpha[3]* aux$Alpha[1]/aux$Alpha[4]))
+  
+  nd
+})
+
+coex_df2$NO_L<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  nd<- sqrt(aux$Alpha_Lower[2]/aux$Alpha_Lower[3]* aux$Alpha_Lower[1]/aux$Alpha_Lower[4])
+  
+  nd
+})
+
+coex_df2$NO_U<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  nd<-(sqrt(aux$Alpha_Upper[2]/aux$Alpha_Upper[3]* aux$Alpha_Upper[1]/aux$Alpha_Upper[4]))
+  
+  nd
+})
+
+#fd= ((nj-1)/(ni-1))* sqrt(aij/ajj * aii/aji)
+
+coex_df2$FD<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #The order here is Te inter (aji), Tu inter (aij), Te intra (ajj), Tu intra (aii) 
+  fd<-((aux$Lambda[1]-1)/(aux$Lambda[2]-1))*(sqrt(aux$Alpha[2]/aux$Alpha[3])* sqrt(aux$Alpha[4]/aux$Alpha[1]))
+  
+  fd
+})
+
+coex_df2$FD_L<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  fd<-((aux$Lambda_Lower[1]-1)/(aux$Lambda_Lower[2]-1))*(sqrt(aux$Alpha_Lower[2]/aux$Alpha_Lower[3])* sqrt(aux$Alpha_Lower[4]/aux$Alpha_Lower[1]))
+  
+  fd
+})
+
+coex_df2$FD_U<-sapply(c(1:3), function(x){
+  aux<-subset(df_alpha_lambda, as.character(Arrival)==as.character(coex_df2$Treatment[x]))
+  
+  #Assuming that the order is always te tu, te tu, inter inter, intra intra
+  fd<-((aux$Lambda_Upper[1]-1)/(aux$Lambda_Upper[2]-1))*(sqrt(aux$Alpha_Upper[2]/aux$Alpha_Upper[3])* sqrt(aux$Alpha_Upper[4]/aux$Alpha_Upper[1]))
+  
+  fd
+})
+
+
+coex_df2$ND<-1-coex_df2$NO
+coex_df2$ND_L<-1-coex_df2$NO_L
+coex_df2$ND_U<-1-coex_df2$NO_U
+
+bound_df<-data.frame(niche_overlap=c(seq(0,3, 0.05))) # creating a vector with niche overlap
+bound_df$niche_diff<-(1-bound_df$niche_overlap) # calculating stabilizating differences from niche overlap 1-rho
+bound_df$fitness_differences_sp_1<-(1/bound_df$niche_overlap) # solid line in your graph this is ok
+bound_df$fitness_differences_sp_temp<- 1-bound_df$fitness_differences_sp_1 #this is an intermediate step to see the differences above one 
+#which is later incorporated into the 2 species
+bound_df$fitness_differences_sp_2<- 1+ bound_df$fitness_differences_sp_temp# dashed line in your graph which is NOT OK in your original graph
+#Here I added the difference calculated in the previous step to make the curves simetric. they must be simmetric!
+#otherwise one species has more chance of priority effects than the other.
+bound_df<-bound_df[, -4]
+#remove the intermediate step 
+str(bound_df)
+colnames(bound_df)<-c("NO", "ND", "FD", "FD2")
+
+```
+
+### Fig 2 - Coexistence plot
+```{r}
+
+ggplot(coex_df2,aes(x=ND, y=FD, colour=Treatment) )+
+  geom_hline(yintercept = 1 ,colour="lightgray")+
+  geom_vline(xintercept = 0 , colour="lightgray")+
+  geom_ribbon(data=bound_df, aes(x=ND, ymin=FD,ymax=FD2), colour="Black", fill="lightgrey", alpha=0.5)+
+  geom_line(data=bound_df, aes(x=ND, y=FD), colour="black")+
+  geom_line(data=bound_df, aes(x=ND, y=FD2),colour="black")+
+  geom_errorbar(data=coex_df2, aes(ymin=FD_L, ymax=FD_U), colour="black", width=0.1)+
+  geom_errorbarh(data=coex_df2, aes(xmin=ND_L, xmax=ND_U), colour="black", height=0.1)+
+  geom_point(data=coex_df2, size=2.75, shape=21, aes(fill=Treatment), colour="black")+
+  ylab(c(""))+
+  xlab(c(""))+
+  #scale_x_discrete(labels=c())+
+  scale_colour_manual(values = c("#4575b4","#d73027", "#fee090"), name="")+
+  scale_fill_manual(values = c("#4575b4","#d73027", "#fee090"), name="")+
+  scale_x_continuous(breaks = seq(-1,1, 0.2), expand=expansion(c(0,0)), limits = c(-1.5, 1))+
+  ylim(c(-1.5,5))+
+  theme_bw()+
+  theme_ines+
+  theme(legend.position = c(0.9,0.9), legend.background = element_rect(fill=NA), legend.text = element_text(size=10), axis.text = element_text(colour="black"))+
+  geom_richtext(label="<span style='color:black'>Priority effects", x=-0.82, y=1.1, size=4, color=NA, fill=NA)+
+  geom_richtext(label="<span style='color:black'>*T. urticae* excluded", x=0, y=2.5, size=4, color=NA, fill=NA)+
+  geom_richtext(label="<span style='color:black'>*T. evansi* excluded", x=0, y=0, size=4, color=NA, fill=NA)+
+  geom_richtext(label="<span style='color:black'>Coexistence", x=0.56, y=1.1, size=4, color=NA, fill=NA)+
+  expand_limits(x = c(-1, 0.75), y = 0)+
+  coord_cartesian(ylim = c(0, 5), xlim = c(-1,0.7))
+
+save_plot("./Estimate_Lambda_fixed_allTreats/coex.pdf")
+```
+
+
